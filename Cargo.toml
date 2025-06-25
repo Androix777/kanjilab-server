@@ -14,3 +14,7 @@ tokio-tungstenite = "0.27.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["local-time"] }
 uuid = { version = "1.17.0", features = ["v4", "serde"] }
+
+[lib]
+name = "kanjilab_server"
+path = "src/lib.rs"

@@ -1,79 +1,66 @@
-use futures_util::{SinkExt, stream::SplitSink};
 use kameo::{
     Actor,
-    message::{Context, Message, StreamMessage},
+    actor::Recipient,
+    message::{Context, Message},
 };
-use tokio::net::TcpStream;
-use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMsg};
-use tracing::{debug, error, info};
+use tracing::info;
 
-use crate::data_types::WsMessage;
+use crate::data_types::*;
+use crate::websocket_client_actor::ToTransport;
 
-pub type ParseResult = Result<WsMessage, String>;
-
-type StreamItem = StreamMessage<ParseResult, (), ()>;
+pub struct SendRaw(pub String);
+pub struct SetTransport(pub Recipient<ToTransport>);
 
 #[derive(Actor)]
 pub struct ClientActor {
-    write: futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMsg>,
+    transport: Option<Recipient<ToTransport>>,
 }
 
 impl ClientActor {
-    pub fn new(write: SplitSink<WebSocketStream<TcpStream>, WsMsg>) -> Self {
-        Self { write }
+    pub fn new() -> Self {
+        Self { transport: None }
+    }
+
+    async fn send_to_transport(&self, msg: ToTransport) {
+        if let Some(tx) = &self.transport {
+            let _ = tx.tell(msg).try_send();
+        }
     }
 }
 
-pub struct SendRaw(pub String);
-
-impl Message<StreamItem> for ClientActor {
+impl Message<SetTransport> for ClientActor {
     type Reply = ();
+    async fn handle(&mut self, SetTransport(rec): SetTransport, _ctx: &mut Context<Self, ()>) {
+        self.transport = Some(rec);
+    }
+}
 
-    async fn handle(&mut self, msg: StreamItem, ctx: &mut Context<Self, Self::Reply>) {
+impl Message<WsMessage> for ClientActor {
+    type Reply = ();
+    async fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self, Self::Reply>) {
         match msg {
-            StreamMessage::Started(()) => {
-                info!("WS-stream attached");
+            WsMessage::InReqSendPublicKey(env) => {
+                info!("public key = {}", env.payload.key);
             }
+            WsMessage::InReqRegisterClient(env) => {
+                info!("register name = {}", env.payload.name);
 
-            StreamMessage::Next(Ok(ws_msg)) => {
-                if let Err(err) = ctx.actor_ref().tell(ws_msg).try_send() {
-                    tracing::warn!("mailbox full, drop message: {}", err);
-                }
+                let resp = WsMessage::OutRespStatus(crate::data_types::Message {
+                    correlation_id: env.correlation_id,
+                    payload: OutRespStatus {
+                        status: "ok".to_string(),
+                    },
+                });
+                self.send_to_transport(ToTransport::Ws(resp)).await;
             }
-
-            StreamMessage::Next(Err(err)) => {
-                error!("Bad incoming JSON: {}", err);
-            }
-
-            StreamMessage::Finished(()) => {
-                info!("WS-stream finished");
-                let _ = ctx.actor_ref().stop_gracefully().await;
-            }
+            _ => {}
         }
     }
 }
 
 impl Message<SendRaw> for ClientActor {
     type Reply = ();
-
     async fn handle(&mut self, SendRaw(text): SendRaw, _ctx: &mut Context<Self, Self::Reply>) {
-        debug!("Send to the client: {}", text);
-        let _ = self.write.send(WsMsg::Text(text.into())).await;
-    }
-}
-
-impl Message<WsMessage> for ClientActor {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self, Self::Reply>) {
-        match msg {
-            WsMessage::InReqSendPublicKey(env) => {
-                tracing::info!("key = {}", env.payload.key);
-            }
-            WsMessage::InReqRegisterClient(env) => {
-                tracing::info!("name = {}", env.payload.name);
-            }
-            _ => {}
-        }
+        self.send_to_transport(ToTransport::Raw(text)).await;
     }
 }

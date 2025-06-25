@@ -105,6 +105,10 @@ pub fn parse(text: &str) -> Result<WsMessage, serde_json::Error> {
     serde_json::from_str::<WsMessage>(text)
 }
 
+pub fn serialize(msg: &WsMessage) -> serde_json::Result<String> {
+    serde_json::to_string(msg)
+}
+
 // #region OTHER
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
