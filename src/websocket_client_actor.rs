@@ -8,11 +8,11 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMsg};
 use tracing::{error, info};
 
-use crate::client_actor::ClientActor;
+use crate::{session_client_actor::ClientActor, data_types::parse};
 use crate::data_types::{WsMessage, serialize};
 
-pub type ParseResult = Result<WsMessage, String>;
-type StreamItem = StreamMessage<ParseResult, (), ()>;
+pub type RawResult = Result<String, String>;
+type StreamItem = StreamMessage<RawResult, (), ()>;
 
 #[derive(Debug)]
 pub enum ToTransport {
@@ -38,20 +38,28 @@ impl WebSocketClientActor {
 impl Message<StreamItem> for WebSocketClientActor {
     type Reply = ();
 
-    async fn handle(&mut self, msg: StreamItem, _ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(&mut self, msg: StreamItem, ctx: &mut Context<Self, ()>) {
         match msg {
             StreamMessage::Started(()) => {
                 info!("WS stream attached");
             }
-            StreamMessage::Next(Ok(ws_msg)) => {
-                let _ = self.session.tell(ws_msg).try_send();
+
+            StreamMessage::Next(Ok(text)) => {
+                match parse(&text) {
+                    Ok(ws_msg) => {
+                        let _ = self.session.tell(ws_msg).try_send();
+                    }
+                    Err(e) => error!("bad incoming json: {e}"),
+                }
             }
+
             StreamMessage::Next(Err(e)) => {
-                error!("bad incoming json: {e}");
+                error!("WebSocket read error: {e}");
             }
+
             StreamMessage::Finished(()) => {
                 info!("WS stream finished");
-                let _ = _ctx.actor_ref().kill();
+                let _ = ctx.actor_ref().kill();
             }
         }
     }

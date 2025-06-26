@@ -23,7 +23,7 @@ impl ClientActor {
 
     async fn send_to_transport(&self, msg: ToTransport) {
         if let Some(tx) = &self.transport {
-            let _ = tx.tell(msg).try_send();
+            let _ = tx.tell(msg).await;
         }
     }
 }

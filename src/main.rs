@@ -6,8 +6,7 @@ use tokio_tungstenite::{tungstenite::Error as WsErr, tungstenite::Message as WsM
 use tracing::Level;
 use tracing_subscriber::{self, fmt::time::LocalTime};
 
-use kanjilab_server::client_actor::{self, ClientActor};
-use kanjilab_server::data_types::parse;
+use kanjilab_server::session_client_actor::{self, ClientActor};
 use kanjilab_server::websocket_client_actor::WebSocketClientActor;
 
 #[tokio::main]
@@ -39,18 +38,18 @@ async fn handle_tcp(stream: TcpStream) {
     let transport_recipient = transport_ref.clone().recipient::<ToTransport>();
 
     session_ref
-        .tell(client_actor::SetTransport(transport_recipient))
+        .tell(session_client_actor::SetTransport(transport_recipient))
         .await
         .ok();
 
-    let parsed_stream = read.filter_map(|r: Result<WsMsg, WsErr>| {
+    let raw_stream = read.filter_map(|r: Result<WsMsg, WsErr>| {
         future::ready(match r {
-            Ok(WsMsg::Text(t)) => Some(parse(&t).map_err(|e| e.to_string())),
+            Ok(WsMsg::Text(t)) => Some(Ok(t.to_string())),
             Ok(_) => None,
             Err(e) => Some(Err(e.to_string())),
         })
     });
-    transport_ref.attach_stream(parsed_stream, (), ());
+    transport_ref.attach_stream(raw_stream, (), ());
 }
 
 fn setup_tracing() {
