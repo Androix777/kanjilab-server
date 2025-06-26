@@ -291,9 +291,9 @@ dependencies = [
 
 [[package]]
 name = "kameo"
-version = "0.17.0"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aea297b740f138aa9c63b4fe2b6256af3b25740313fb7f3fd383e6e08121d0a5"
+checksum = "41a73be96f616ca2784f597b5b6635582f5a7b3ba73b1dbe7afa5d9667955d39"
 dependencies = [
  "downcast-rs",
  "dyn-clone",

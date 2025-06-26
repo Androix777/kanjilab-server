@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 futures-util = "0.3.31"
-kameo = "0.17.0"
+kameo = "0.17.2"
 serde = "1.0.219"
 serde_json = "1.0.140"
 time = { version = "0.3.41", features = ["macros"] }
