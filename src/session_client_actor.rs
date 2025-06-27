@@ -1,66 +1,180 @@
+// #region IMPORTS
 use kameo::{
     Actor,
-    actor::Recipient,
+    actor::{Recipient, WeakActorRef},
     message::{Context, Message},
 };
-use tracing::info;
+use tracing::{info, warn};
+use uuid::Uuid;
 
-use crate::data_types::*;
-use crate::websocket_client_actor::ToTransport;
+use crate::{
+    data_types::{self, *},
+    game_actor::*,
+    room_actor::*,
+    tools::*,
+    websocket_client_actor::*,
+};
+// #endregion
 
-pub struct SendRaw(pub String);
-pub struct SetTransport(pub Recipient<ToTransport>);
-
+// #region ACTOR
 #[derive(Actor)]
-pub struct ClientActor {
+pub struct SessionClientActor {
     transport: Option<Recipient<ToTransport>>,
+
+    pub_key: Option<String>,
+    sign_challenge: Option<Uuid>,
+    signature_verified: bool,
+
+    game: WeakActorRef<crate::game_actor::GameActor>,
+    room: Option<WeakActorRef<RoomActor>>,
 }
 
-impl ClientActor {
-    pub fn new() -> Self {
-        Self { transport: None }
+impl SessionClientActor {
+    pub fn new(game: WeakActorRef<crate::game_actor::GameActor>) -> Self {
+        Self {
+            transport: None,
+            pub_key: None,
+            sign_challenge: None,
+            signature_verified: false,
+            game,
+            room: None,
+        }
     }
 
-    async fn send_to_transport(&self, msg: ToTransport) {
+    async fn send(&self, msg: ToTransport) {
         if let Some(tx) = &self.transport {
             let _ = tx.tell(msg).await;
         }
     }
-}
 
-impl Message<SetTransport> for ClientActor {
+    fn current_challenge_str(&self) -> Option<String> {
+        self.sign_challenge.map(|u| u.to_string())
+    }
+}
+// #endregion
+
+// #region MESSAGES
+pub struct SetTransport(pub Recipient<ToTransport>);
+impl Message<SetTransport> for SessionClientActor {
     type Reply = ();
     async fn handle(&mut self, SetTransport(rec): SetTransport, _ctx: &mut Context<Self, ()>) {
         self.transport = Some(rec);
     }
 }
 
-impl Message<WsMessage> for ClientActor {
+pub struct SendWs(pub WsMessage);
+impl Message<SendWs> for SessionClientActor {
     type Reply = ();
-    async fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(&mut self, SendWs(ws): SendWs, _ctx: &mut Context<Self, Self::Reply>) {
+        self.send(ToTransport::Ws(ws)).await;
+    }
+}
+
+impl Message<WsMessage> for SessionClientActor {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: WsMessage, ctx: &mut Context<Self, Self::Reply>) {
         match msg {
             WsMessage::InReqSendPublicKey(env) => {
-                info!("public key = {}", env.payload.key);
-            }
-            WsMessage::InReqRegisterClient(env) => {
-                info!("register name = {}", env.payload.name);
+                info!("IN_REQ_sendPublicKey, key = {}", env.payload.key);
 
-                let resp = WsMessage::OutRespStatus(crate::data_types::Message {
+                if self.pub_key.is_none() {
+                    self.pub_key = Some(env.payload.key.clone());
+                }
+
+                let challenge = Uuid::new_v4();
+                self.sign_challenge = Some(challenge);
+
+                let resp = WsMessage::OutRespSignMessage(data_types::Message {
                     correlation_id: env.correlation_id,
-                    payload: OutRespStatus {
-                        status: "ok".to_string(),
+                    payload: OutRespSignMessage {
+                        message: challenge.to_string(),
                     },
                 });
-                self.send_to_transport(ToTransport::Ws(resp)).await;
+                self.send(ToTransport::Ws(resp)).await;
             }
-            _ => {}
+
+            WsMessage::InReqVerifySignature(env) => {
+                info!("IN_REQ_verifySignature");
+
+                let Some(challenge) = self.current_challenge_str() else {
+                    warn!("no stored challenge – ignoring");
+                    return;
+                };
+                let Some(key) = self.pub_key.clone() else {
+                    warn!("no public key – ignoring");
+                    return;
+                };
+
+                let is_ok = match verify_signature(&challenge, &env.payload.signature, &key) {
+                    Ok(ok) => ok,
+                    Err(e) => {
+                        warn!("verify_signature error: {e}");
+                        false
+                    }
+                };
+
+                self.signature_verified = is_ok;
+
+                let status_text = if is_ok { "success" } else { "error" }.to_string();
+                let resp = WsMessage::OutRespStatus(data_types::Message {
+                    correlation_id: env.correlation_id,
+                    payload: OutRespStatus {
+                        status: status_text,
+                    },
+                });
+                self.send(ToTransport::Ws(resp)).await;
+            }
+
+            WsMessage::InReqRegisterClient(env) => {
+                if !self.signature_verified {
+                    warn!("register requested before signature verified");
+                    let resp = WsMessage::OutRespStatus(data_types::Message {
+                        correlation_id: env.correlation_id,
+                        payload: OutRespStatus {
+                            status: "error".into(),
+                        },
+                    });
+                    self.send(ToTransport::Ws(resp)).await;
+                    return;
+                }
+
+                let Some(game) = self.game.upgrade() else {
+                    warn!("game actor gone");
+                    return;
+                };
+                let Some(key) = self.pub_key.clone() else {
+                    warn!("no public key – cannot register");
+                    return;
+                };
+
+                let req = RegisterClientRequest {
+                    session: ctx.actor_ref().clone(),
+                    name: env.payload.name.clone(),
+                    pub_key: key,
+                    correlation_id: env.correlation_id,
+                };
+                let _ = game.tell(req).try_send();
+            }
+
+            _ => info!("Unknown message: {msg:?}"),
         }
     }
 }
 
-impl Message<SendRaw> for ClientActor {
+pub struct SendRaw(pub String);
+impl Message<SendRaw> for SessionClientActor {
     type Reply = ();
     async fn handle(&mut self, SendRaw(text): SendRaw, _ctx: &mut Context<Self, Self::Reply>) {
-        self.send_to_transport(ToTransport::Raw(text)).await;
+        self.send(ToTransport::Raw(text)).await;
     }
 }
+
+pub struct SetRoom(pub WeakActorRef<RoomActor>);
+impl Message<SetRoom> for SessionClientActor {
+    type Reply = ();
+    async fn handle(&mut self, SetRoom(room): SetRoom, _ctx: &mut Context<Self, ()>) {
+        self.room = Some(room);
+    }
+}
+// #endregion

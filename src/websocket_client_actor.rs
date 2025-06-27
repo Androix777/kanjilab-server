@@ -1,39 +1,48 @@
+// #region IMPORTS
+
 use futures_util::{SinkExt, stream::SplitSink};
 use kameo::{
     Actor,
-    actor::ActorRef,
+    actor::WeakActorRef,
     message::{Context, Message, StreamMessage},
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMsg};
 use tracing::error;
 
-use crate::data_types::{WsMessage, serialize};
-use crate::{data_types::parse, session_client_actor::ClientActor};
+use crate::{data_types::*, session_client_actor::*};
 
 pub type RawResult = Result<String, String>;
 type StreamItem = StreamMessage<RawResult, (), ()>;
 
-#[derive(Debug)]
-pub enum ToTransport {
-    Raw(String),
-    Ws(WsMessage),
-}
+// #endregion
+
+// #region ACTOR
 
 #[derive(Actor)]
 pub struct WebSocketClientActor {
     write: SplitSink<WebSocketStream<TcpStream>, WsMsg>,
-    session: ActorRef<ClientActor>,
+    session: WeakActorRef<SessionClientActor>,
 }
 
 impl WebSocketClientActor {
     pub fn new(
         write: SplitSink<WebSocketStream<TcpStream>, WsMsg>,
-        session: ActorRef<ClientActor>,
+        session: WeakActorRef<SessionClientActor>,
     ) -> Self {
         Self { write, session }
     }
+
+    async fn send_to_session(&self, ws_msg: WsMessage) {
+        if let Some(session) = self.session.upgrade() {
+            let _ = session.tell(ws_msg).try_send();
+        }
+    }
 }
+
+// #endregion
+
+// #region MESSAGES
 
 impl Message<StreamItem> for WebSocketClientActor {
     type Reply = ();
@@ -43,9 +52,7 @@ impl Message<StreamItem> for WebSocketClientActor {
             StreamMessage::Started(()) => {}
 
             StreamMessage::Next(Ok(text)) => match parse(&text) {
-                Ok(ws_msg) => {
-                    let _ = self.session.tell(ws_msg).try_send();
-                }
+                Ok(ws_msg) => self.send_to_session(ws_msg).await,
                 Err(e) => error!("bad incoming json: {e}"),
             },
 
@@ -54,10 +61,20 @@ impl Message<StreamItem> for WebSocketClientActor {
             }
 
             StreamMessage::Finished(()) => {
-                let _ = ctx.actor_ref().kill();
+                if let Some(session) = self.session.upgrade() {
+                    let _ = session.kill();
+                } else {
+                    let _ = ctx.actor_ref().kill();
+                }
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum ToTransport {
+    Raw(String),
+    Ws(WsMessage),
 }
 
 impl Message<ToTransport> for WebSocketClientActor {
@@ -77,3 +94,5 @@ impl Message<ToTransport> for WebSocketClientActor {
         }
     }
 }
+
+// #endregion
