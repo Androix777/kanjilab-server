@@ -1,11 +1,5 @@
 // #region IMPORTS
-use crate::{
-    data_types:: *,
-    game_actor::*,
-    room_actor::*,
-    tools::*,
-    websocket_client_actor::*,
-};
+use crate::{data_types::*, game_actor::*, room_actor::*, tools::*, websocket_client_actor::*};
 use kameo::{
     Actor,
     actor::{Recipient, WeakActorRef},
@@ -92,9 +86,12 @@ impl Message<TransportMsg> for SessionClientActor {
             TransportMsg::InReqSendPublicKey(env) => {
                 info!("IN_REQ_sendPublicKey, key = {}", env.payload.key);
 
-                if self.pub_key.is_none() {
-                    self.pub_key = Some(env.payload.key.clone());
+                if self.signature_verified {
+                    warn!("signature already verified");
+                    self.send_status(&env, "signature already verified").await;
                 }
+
+                self.pub_key = Some(env.payload.key.clone());
 
                 let challenge = Uuid::new_v4();
                 self.sign_challenge = Some(challenge);
@@ -112,11 +109,13 @@ impl Message<TransportMsg> for SessionClientActor {
                 info!("IN_REQ_verifySignature");
 
                 let Some(challenge) = self.current_challenge_str() else {
-                    warn!("no stored challenge – ignoring");
+                    warn!("no stored challenge");
+                    self.send_status(&env, "no stored challenges").await;
                     return;
                 };
                 let Some(key) = self.pub_key.clone() else {
-                    warn!("no public key – ignoring");
+                    warn!("no public key");
+                    self.send_status(&env, "no public key").await;
                     return;
                 };
 
@@ -124,6 +123,7 @@ impl Message<TransportMsg> for SessionClientActor {
                     Ok(ok) => ok,
                     Err(e) => {
                         warn!("verify_signature error: {e}");
+                        self.send_status(&env, "error").await;
                         false
                     }
                 };
@@ -143,22 +143,18 @@ impl Message<TransportMsg> for SessionClientActor {
             TransportMsg::InReqRegisterClient(env) => {
                 if !self.signature_verified {
                     warn!("register requested before signature verified");
-                    let resp = TransportMsg::OutRespStatus(TransportEnvelope {
-                        correlation_id: env.correlation_id,
-                        payload: OutRespStatus {
-                            status: "error".into(),
-                        },
-                    });
-                    self.send(ToTransport::Ws(resp)).await;
+                    self.send_status(&env, "error").await;
                     return;
                 }
 
                 let Some(game) = self.game.upgrade() else {
                     warn!("game actor gone");
+                    self.send_status(&env, "error").await;
                     return;
                 };
                 let Some(key) = self.pub_key.clone() else {
-                    warn!("no public key – cannot register");
+                    warn!("no public key");
+                    self.send_status(&env, "no public key").await;
                     return;
                 };
 
@@ -173,15 +169,15 @@ impl Message<TransportMsg> for SessionClientActor {
 
             TransportMsg::InReqClientList(env) => {
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
-                    room
-                        .tell(ClientListRequest {
-                            requester: ctx.actor_ref().clone(),
-                            correlation_id: env.correlation_id,
-                        })
-                        .await.ok();
+                    room.tell(ClientListRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                    })
+                    .await
+                    .ok();
                 } else {
                     warn!("client asked for clientList but has no room");
-                    self.send_status(&env, "error").await;
+                    self.send_status(&env, "no room").await;
                 }
             }
 
