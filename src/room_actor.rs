@@ -1,16 +1,17 @@
-use std::{collections::HashMap, ops::ControlFlow};
-
+// #region IMPORTS
+use crate::{game_actor::*, session_client_actor::*};
 use kameo::{
     Actor,
     actor::{ActorID, ActorRef, WeakActorRef},
     error::{ActorStopReason, Infallible},
     message::{Context, Message},
 };
-use tracing::{debug, info, warn};
+use std::{collections::HashMap, ops::ControlFlow};
+use tracing::{info, warn};
 use uuid::Uuid;
+// #endregion
 
-use crate::{data_types::*, game_actor::*, session_client_actor::*};
-
+// #region ACTOR
 pub struct RoomActor {
     name: String,
     clients: HashMap<Uuid, RoomClient>,
@@ -50,7 +51,9 @@ impl Actor for RoomActor {
         Ok(ControlFlow::Continue(()))
     }
 }
+// #endregion
 
+// #region TYPES
 pub struct RoomClientInfo {
     pub is_admin: bool,
 }
@@ -59,7 +62,9 @@ struct RoomClient {
     session: ActorRef<SessionClientActor>,
     room_info: RoomClientInfo,
 }
+// #endregion
 
+// #region MESSAGES
 pub struct AddClient {
     pub uuid: Uuid,
     pub session: ActorRef<SessionClientActor>,
@@ -113,7 +118,9 @@ impl Message<ClientListRequest> for RoomActor {
         let mut by_id: HashMap<Uuid, GameClientInfo> =
             game_infos.into_iter().map(|g| (g.id, g)).collect();
 
-        use crate::data_types::{ClientInfo, Message as Msg, OutRespClientList, WsMessage};
+        use crate::data_types::{
+            ClientInfo, OutRespClientList, TransportEnvelope as Msg, TransportMsg,
+        };
         let clients: Vec<ClientInfo> = ids
             .into_iter()
             .filter_map(|id| {
@@ -128,10 +135,11 @@ impl Message<ClientListRequest> for RoomActor {
             })
             .collect();
 
-        let ws = WsMessage::OutRespClientList(Msg {
+        let ws = TransportMsg::OutRespClientList(Msg {
             correlation_id,
             payload: OutRespClientList { clients },
         });
         requester.tell(SendWs(ws)).await.ok();
     }
 }
+// #endregion

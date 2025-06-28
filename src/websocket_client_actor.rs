@@ -1,5 +1,6 @@
 // #region IMPORTS
 
+use crate::{data_types::*, session_client_actor::*};
 use futures_util::{SinkExt, stream::SplitSink};
 use kameo::{
     Actor,
@@ -9,9 +10,6 @@ use kameo::{
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMsg};
 use tracing::error;
-
-use crate::{data_types::*, session_client_actor::*};
-
 pub type RawResult = Result<String, String>;
 type StreamItem = StreamMessage<RawResult, (), ()>;
 
@@ -33,7 +31,7 @@ impl WebSocketClientActor {
         Self { write, session }
     }
 
-    async fn send_to_session(&self, ws_msg: WsMessage) {
+    async fn send_to_session(&self, ws_msg: TransportMsg) {
         if let Some(session) = self.session.upgrade() {
             let _ = session.tell(ws_msg).await;
         }
@@ -74,7 +72,7 @@ impl Message<StreamItem> for WebSocketClientActor {
 #[derive(Debug)]
 pub enum ToTransport {
     Raw(String),
-    Ws(WsMessage),
+    Ws(TransportMsg),
 }
 
 impl Message<ToTransport> for WebSocketClientActor {

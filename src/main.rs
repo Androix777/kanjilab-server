@@ -1,8 +1,8 @@
-use tokio::net::TcpListener;
-use tracing::Level;
-use tracing_subscriber::{self, fmt::time::LocalTime};
 use kameo::Actor;
 use kanjilab_server::game_actor::{GameActor, NewClient};
+use tokio::net::TcpListener;
+use tracing::Level;
+use tracing_subscriber::fmt::time::LocalTime;
 
 #[tokio::main]
 async fn main() {
@@ -30,6 +30,5 @@ fn setup_tracing() {
         )))
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set global logger");
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global logger");
 }

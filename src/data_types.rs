@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct Message<T> {
+pub struct TransportEnvelope<T> {
     pub correlation_id: Uuid,
     pub payload: T,
 }
@@ -11,101 +11,101 @@ pub struct Message<T> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "messageType")]
 #[serde(rename_all = "camelCase")]
-pub enum WsMessage {
+pub enum TransportMsg {
     // #region IN_REQ
     #[serde(rename = "IN_REQ_sendPublicKey")]
-    InReqSendPublicKey(Message<InReqSendPublicKey>),
+    InReqSendPublicKey(TransportEnvelope<InReqSendPublicKey>),
 
     #[serde(rename = "IN_REQ_verifysignature")]
-    InReqVerifySignature(Message<InReqVerifySignature>),
+    InReqVerifySignature(TransportEnvelope<InReqVerifySignature>),
 
     #[serde(rename = "IN_REQ_registerClient")]
-    InReqRegisterClient(Message<InReqRegisterClient>),
+    InReqRegisterClient(TransportEnvelope<InReqRegisterClient>),
 
     #[serde(rename = "IN_REQ_sendChat")]
-    InReqSendChat(Message<InReqSendChat>),
+    InReqSendChat(TransportEnvelope<InReqSendChat>),
 
     #[serde(rename = "IN_REQ_makeAdmin")]
-    InReqMakeAdmin(Message<InReqMakeAdmin>),
+    InReqMakeAdmin(TransportEnvelope<InReqMakeAdmin>),
 
     #[serde(rename = "IN_REQ_clientList")]
-    InReqClientList(Message<InReqClientList>),
+    InReqClientList(TransportEnvelope<InReqClientList>),
 
     #[serde(rename = "IN_REQ_startGame")]
-    InReqStartGame(Message<InReqStartGame>),
+    InReqStartGame(TransportEnvelope<InReqStartGame>),
 
     #[serde(rename = "IN_REQ_stopGame")]
-    InReqStopGame(Message<InReqStopGame>),
+    InReqStopGame(TransportEnvelope<InReqStopGame>),
 
     #[serde(rename = "IN_REQ_sendAnswer")]
-    InReqSendAnswer(Message<InReqSendAnswer>),
+    InReqSendAnswer(TransportEnvelope<InReqSendAnswer>),
 
     #[serde(rename = "IN_REQ_sendGameSettings")]
-    InReqSendGameSettings(Message<InReqSendGameSettings>),
+    InReqSendGameSettings(TransportEnvelope<InReqSendGameSettings>),
     // #endregion
 
     // #region OUT_RESP
     #[serde(rename = "OUT_RESP_clientRegistered")]
-    OutRespClientRegistered(Message<OutRespClientRegistered>),
+    OutRespClientRegistered(TransportEnvelope<OutRespClientRegistered>),
 
     #[serde(rename = "OUT_RESP_status")]
-    OutRespStatus(Message<OutRespStatus>),
+    OutRespStatus(TransportEnvelope<OutRespStatus>),
 
     #[serde(rename = "OUT_RESP_clientList")]
-    OutRespClientList(Message<OutRespClientList>),
+    OutRespClientList(TransportEnvelope<OutRespClientList>),
 
     #[serde(rename = "OUT_RESP_signMessage")]
-    OutRespSignMessage(Message<OutRespSignMessage>),
+    OutRespSignMessage(TransportEnvelope<OutRespSignMessage>),
     // #endregion
 
     // #region OUT_REQ
     #[serde(rename = "OUT_REQ_question")]
-    OutReqQuestion(Message<OutReqQuestion>),
+    OutReqQuestion(TransportEnvelope<OutReqQuestion>),
     // #endregion
 
     // #region IN_RESP
     #[serde(rename = "IN_RESP_question")]
-    InRespQuestion(Message<InRespQuestion>),
+    InRespQuestion(TransportEnvelope<InRespQuestion>),
     // #endregion
 
     // #region OUT_NOTIF
     #[serde(rename = "OUT_NOTIF_clientRegistered")]
-    OutNotifClientRegistered(Message<OutNotifClientRegistered>),
+    OutNotifClientRegistered(TransportEnvelope<OutNotifClientRegistered>),
 
     #[serde(rename = "OUT_NOTIF_clientDisconnected")]
-    OutNotifClientDisconnected(Message<OutNotifClientDisconnected>),
+    OutNotifClientDisconnected(TransportEnvelope<OutNotifClientDisconnected>),
 
     #[serde(rename = "OUT_NOTIF_chatSent")]
-    OutNotifChatSent(Message<OutNotifChatSent>),
+    OutNotifChatSent(TransportEnvelope<OutNotifChatSent>),
 
     #[serde(rename = "OUT_NOTIF_adminMade")]
-    OutNotifAdminMade(Message<OutNotifAdminMade>),
+    OutNotifAdminMade(TransportEnvelope<OutNotifAdminMade>),
 
     #[serde(rename = "OUT_NOTIF_gameStarted")]
-    OutNotifGameStarted(Message<OutNotifGameStarted>),
+    OutNotifGameStarted(TransportEnvelope<OutNotifGameStarted>),
 
     #[serde(rename = "OUT_NOTIF_gameStopped")]
-    OutNotifGameStopped(Message<OutNotifGameStopped>),
+    OutNotifGameStopped(TransportEnvelope<OutNotifGameStopped>),
 
     #[serde(rename = "OUT_NOTIF_question")]
-    OutNotifQuestion(Message<OutNotifQuestion>),
+    OutNotifQuestion(TransportEnvelope<OutNotifQuestion>),
 
     #[serde(rename = "OUT_NOTIF_clientAnswered")]
-    OutNotifClientAnswered(Message<OutNotifClientAnswered>),
+    OutNotifClientAnswered(TransportEnvelope<OutNotifClientAnswered>),
 
     #[serde(rename = "OUT_NOTIF_roundEnded")]
-    OutNotifRoundEnded(Message<OutNotifRoundEnded>),
+    OutNotifRoundEnded(TransportEnvelope<OutNotifRoundEnded>),
 
     #[serde(rename = "OUT_NOTIF_gameSettingsChanged")]
-    OutNotifGameSettingsChanged(Message<OutNotifGameSettingsChanged>),
+    OutNotifGameSettingsChanged(TransportEnvelope<OutNotifGameSettingsChanged>),
     // #endregion
 }
 
-pub fn parse(text: &str) -> Result<WsMessage, serde_json::Error> {
-    serde_json::from_str::<WsMessage>(text)
+pub fn parse(text: &str) -> Result<TransportMsg, serde_json::Error> {
+    serde_json::from_str::<TransportMsg>(text)
 }
 
-pub fn serialize(msg: &WsMessage) -> serde_json::Result<String> {
+pub fn serialize(msg: &TransportMsg) -> serde_json::Result<String> {
     serde_json::to_string(msg)
 }
 

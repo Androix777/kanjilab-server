@@ -1,6 +1,5 @@
 // #region IMPORTS
-use std::{collections::HashMap, ops::ControlFlow};
-
+use crate::{data_types::*, room_actor::*, session_client_actor::*, websocket_client_actor::*};
 use futures_util::{StreamExt, future};
 use kameo::{
     Actor,
@@ -8,6 +7,7 @@ use kameo::{
     error::{ActorStopReason, Infallible},
     message::{Context, Message},
 };
+use std::{collections::HashMap, ops::ControlFlow};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     accept_async,
@@ -15,13 +15,6 @@ use tokio_tungstenite::{
 };
 use tracing::{error, info, warn};
 use uuid::Uuid;
-
-use crate::{
-    data_types::{self, *},
-    room_actor::*,
-    session_client_actor::{self, *},
-    websocket_client_actor::*,
-};
 // #endregion
 
 // #region ACTOR
@@ -108,10 +101,7 @@ impl GameActor {
         .await;
 
         let recipient = transport_ref.clone().recipient::<ToTransport>();
-        session_ref
-            .tell(session_client_actor::SetTransport(recipient))
-            .await
-            .ok();
+        session_ref.tell(SetTransport(recipient)).await.ok();
 
         let raw_stream = read.filter_map(|r: Result<WsMsg, WsErr>| {
             future::ready(match r {
@@ -212,12 +202,9 @@ impl Message<RegisterClientRequest> for GameActor {
             })
             .await;
 
-        session_ref
-            .tell(session_client_actor::SetRoom(self.room.downgrade()))
-            .await
-            .ok();
+        session_ref.tell(SetRoom(self.room.downgrade())).await.ok();
 
-        let resp = WsMessage::OutRespClientRegistered(data_types::Message {
+        let resp = TransportMsg::OutRespClientRegistered(TransportEnvelope {
             correlation_id,
             payload: OutRespClientRegistered {
                 id: uuid.to_string(),

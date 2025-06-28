@@ -1,19 +1,18 @@
 // #region IMPORTS
-use kameo::{
-    Actor,
-    actor::{ActorRef, Recipient, WeakActorRef},
-    message::{Context, Message},
-};
-use tracing::{info, warn};
-use uuid::Uuid;
-
 use crate::{
-    data_types::{self, *},
+    data_types:: *,
     game_actor::*,
     room_actor::*,
     tools::*,
     websocket_client_actor::*,
 };
+use kameo::{
+    Actor,
+    actor::{Recipient, WeakActorRef},
+    message::{Context, Message},
+};
+use tracing::{info, warn};
+use uuid::Uuid;
 // #endregion
 
 // #region ACTOR
@@ -47,14 +46,12 @@ impl SessionClientActor {
         }
     }
 
-    pub async fn send_ws(&self, ws: data_types::WsMessage) {
+    pub async fn send_ws(&self, ws: TransportMsg) {
         self.send(ToTransport::Ws(ws)).await;
     }
 
-    async fn send_status<P>(&self, env: &data_types::Message<P>, status: &str) {
-        use data_types::{Message, OutRespStatus, WsMessage};
-
-        let ws = WsMessage::OutRespStatus(Message {
+    async fn send_status<P>(&self, env: &TransportEnvelope<P>, status: &str) {
+        let ws = TransportMsg::OutRespStatus(TransportEnvelope {
             correlation_id: env.correlation_id,
             payload: OutRespStatus {
                 status: status.to_string(),
@@ -79,7 +76,7 @@ impl Message<SetTransport> for SessionClientActor {
     }
 }
 
-pub struct SendWs(pub WsMessage);
+pub struct SendWs(pub TransportMsg);
 impl Message<SendWs> for SessionClientActor {
     type Reply = ();
     async fn handle(&mut self, SendWs(ws): SendWs, _ctx: &mut Context<Self, Self::Reply>) {
@@ -87,12 +84,12 @@ impl Message<SendWs> for SessionClientActor {
     }
 }
 
-impl Message<WsMessage> for SessionClientActor {
+impl Message<TransportMsg> for SessionClientActor {
     type Reply = ();
 
-    async fn handle(&mut self, msg: WsMessage, ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(&mut self, msg: TransportMsg, ctx: &mut Context<Self, Self::Reply>) {
         match msg {
-            WsMessage::InReqSendPublicKey(env) => {
+            TransportMsg::InReqSendPublicKey(env) => {
                 info!("IN_REQ_sendPublicKey, key = {}", env.payload.key);
 
                 if self.pub_key.is_none() {
@@ -102,7 +99,7 @@ impl Message<WsMessage> for SessionClientActor {
                 let challenge = Uuid::new_v4();
                 self.sign_challenge = Some(challenge);
 
-                let resp = WsMessage::OutRespSignMessage(data_types::Message {
+                let resp = TransportMsg::OutRespSignMessage(TransportEnvelope {
                     correlation_id: env.correlation_id,
                     payload: OutRespSignMessage {
                         message: challenge.to_string(),
@@ -111,7 +108,7 @@ impl Message<WsMessage> for SessionClientActor {
                 self.send(ToTransport::Ws(resp)).await;
             }
 
-            WsMessage::InReqVerifySignature(env) => {
+            TransportMsg::InReqVerifySignature(env) => {
                 info!("IN_REQ_verifySignature");
 
                 let Some(challenge) = self.current_challenge_str() else {
@@ -134,7 +131,7 @@ impl Message<WsMessage> for SessionClientActor {
                 self.signature_verified = is_ok;
 
                 let status_text = if is_ok { "success" } else { "error" }.to_string();
-                let resp = WsMessage::OutRespStatus(data_types::Message {
+                let resp = TransportMsg::OutRespStatus(TransportEnvelope {
                     correlation_id: env.correlation_id,
                     payload: OutRespStatus {
                         status: status_text,
@@ -143,10 +140,10 @@ impl Message<WsMessage> for SessionClientActor {
                 self.send(ToTransport::Ws(resp)).await;
             }
 
-            WsMessage::InReqRegisterClient(env) => {
+            TransportMsg::InReqRegisterClient(env) => {
                 if !self.signature_verified {
                     warn!("register requested before signature verified");
-                    let resp = WsMessage::OutRespStatus(data_types::Message {
+                    let resp = TransportMsg::OutRespStatus(TransportEnvelope {
                         correlation_id: env.correlation_id,
                         payload: OutRespStatus {
                             status: "error".into(),
@@ -174,7 +171,7 @@ impl Message<WsMessage> for SessionClientActor {
                 let _ = game.tell(req).await;
             }
 
-            WsMessage::InReqClientList(env) => {
+            TransportMsg::InReqClientList(env) => {
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     let _ = room
                         .tell(ClientListRequest {
