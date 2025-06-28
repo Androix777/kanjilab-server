@@ -16,7 +16,7 @@ async fn main() {
         let game_clone = game.clone();
 
         tokio::spawn(async move {
-            let _ = game_clone.tell(NewClient(stream)).await;
+            game_clone.tell(NewClient(stream)).await.ok();
         });
     }
 }

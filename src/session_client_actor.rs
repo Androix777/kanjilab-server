@@ -42,7 +42,7 @@ impl SessionClientActor {
 
     async fn send(&self, msg: ToTransport) {
         if let Some(tx) = &self.transport {
-            let _ = tx.tell(msg).await;
+            tx.tell(msg).await.ok();
         }
     }
 
@@ -168,17 +168,17 @@ impl Message<TransportMsg> for SessionClientActor {
                     pub_key: key,
                     correlation_id: env.correlation_id,
                 };
-                let _ = game.tell(req).await;
+                game.tell(req).await.ok();
             }
 
             TransportMsg::InReqClientList(env) => {
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
-                    let _ = room
+                    room
                         .tell(ClientListRequest {
                             requester: ctx.actor_ref().clone(),
                             correlation_id: env.correlation_id,
                         })
-                        .await;
+                        .await.ok();
                 } else {
                     warn!("client asked for clientList but has no room");
                     self.send_status(&env, "error").await;

@@ -33,7 +33,7 @@ impl WebSocketClientActor {
 
     async fn send_to_session(&self, ws_msg: TransportMsg) {
         if let Some(session) = self.session.upgrade() {
-            let _ = session.tell(ws_msg).await;
+            session.tell(ws_msg).await.ok();
         }
     }
 }
@@ -60,9 +60,9 @@ impl Message<StreamItem> for WebSocketClientActor {
 
             StreamMessage::Finished(()) => {
                 if let Some(session) = self.session.upgrade() {
-                    let _ = session.kill();
+                    session.kill();
                 } else {
-                    let _ = ctx.actor_ref().kill();
+                    ctx.actor_ref().kill();
                 }
             }
         }
@@ -81,11 +81,11 @@ impl Message<ToTransport> for WebSocketClientActor {
     async fn handle(&mut self, msg: ToTransport, _ctx: &mut Context<Self, Self::Reply>) {
         match msg {
             ToTransport::Raw(text) => {
-                let _ = self.write.send(WsMsg::Text(text.into())).await;
+                self.write.send(WsMsg::Text(text.into())).await.ok();
             }
             ToTransport::Ws(ws_msg) => match serialize(&ws_msg) {
                 Ok(text) => {
-                    let _ = self.write.send(WsMsg::Text(text.into())).await;
+                    self.write.send(WsMsg::Text(text.into())).await.ok();
                 }
                 Err(e) => error!("serialize error: {e}"),
             },

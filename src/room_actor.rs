@@ -1,13 +1,13 @@
 // #region IMPORTS
-use crate::{game_actor::*, session_client_actor::*};
+use crate::{data_types::*, game_actor::*, session_client_actor::*};
 use kameo::{
     Actor,
     actor::{ActorID, ActorRef, WeakActorRef},
     error::{ActorStopReason, Infallible},
     message::{Context, Message},
 };
+use tracing::debug;
 use std::{collections::HashMap, ops::ControlFlow};
-use tracing::{info, warn};
 use uuid::Uuid;
 // #endregion
 
@@ -34,30 +34,78 @@ impl Actor for RoomActor {
         &mut self,
         _ar: WeakActorRef<Self>,
         id: ActorID,
-        reason: ActorStopReason,
+        _reason: ActorStopReason,
     ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
-        let leaver = self
+        if let Some(uuid) = self
             .clients
             .iter()
-            .find(|(_, rc)| rc.session.id() == id)
-            .map(|(uuid, _)| *uuid);
-
-        if let Some(uuid) = leaver {
+            .find(|(_, c)| c.session.id() == id)
+            .map(|(u, _)| *u)
+        {
             self.clients.remove(&uuid);
-            info!("client {uuid} left room \"{}\": {:?}", self.name, reason);
-        } else {
-            warn!("non-client link died in room: {id:?}");
+            self.notif_client_disconnected(uuid).await;
+
+            if let Some((&new_admin_uuid, _)) = self.clients.iter().next() {
+                if !self.clients[&new_admin_uuid].room_info.is_admin {
+                    self.clients
+                        .get_mut(&new_admin_uuid)
+                        .unwrap()
+                        .room_info
+                        .is_admin = true;
+                    self.notif_admin_made(new_admin_uuid).await;
+                }
+            }
         }
         Ok(ControlFlow::Continue(()))
     }
 }
+
+impl RoomActor {
+    async fn broadcast(&self, ws: TransportMsg) {
+        for RoomClient { session, .. } in self.clients.values() {
+            session.tell(SendWs(ws.clone())).await.ok();
+        }
+    }
+
+    async fn notif_client_registered(&self, client_info: ClientInfo) {
+        let ws = TransportMsg::OutNotifClientRegistered(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifClientRegistered {
+                client: client_info,
+            },
+        });
+        self.broadcast(ws).await;
+    }
+
+    async fn notif_client_disconnected(&self, uuid: Uuid) {
+        let ws = TransportMsg::OutNotifClientDisconnected(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifClientDisconnected {
+                id: uuid.to_string(),
+            },
+        });
+        self.broadcast(ws).await;
+    }
+    async fn notif_admin_made(&self, uuid: Uuid) {
+        let ws = TransportMsg::OutNotifAdminMade(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifAdminMade {
+                id: uuid.to_string(),
+            },
+        });
+        self.broadcast(ws).await;
+    }
+}
+
 // #endregion
 
 // #region TYPES
+#[derive(Debug)]
 pub struct RoomClientInfo {
     pub is_admin: bool,
 }
 
+#[derive(Debug)]
 struct RoomClient {
     session: ActorRef<SessionClientActor>,
     room_info: RoomClientInfo,
@@ -76,16 +124,39 @@ impl Message<AddClient> for RoomActor {
     async fn handle(
         &mut self,
         AddClient { uuid, session }: AddClient,
-        _ctx: &mut Context<Self, ()>,
+        ctx: &mut Context<Self, ()>,
     ) {
         let is_admin = self.clients.is_empty();
+
+        session.link(&ctx.actor_ref()).await;
+
         self.clients.insert(
             uuid,
             RoomClient {
-                session,
+                session: session.clone(),
                 room_info: RoomClientInfo { is_admin },
             },
         );
+
+        let Some(game) = self.game.upgrade() else {
+            return;
+        };
+        let Ok(mut infos) = game.ask(GetClientsInfo { ids: vec![uuid] }).await else {
+            return;
+        };
+        let Some(g) = infos.pop() else { return };
+
+        let client_info = ClientInfo {
+            id: g.id.to_string(),
+            key: g.key,
+            name: g.name,
+            is_admin,
+        };
+
+        self.notif_client_registered(client_info).await;
+        if is_admin {
+            self.notif_admin_made(uuid).await;
+        }
     }
 }
 

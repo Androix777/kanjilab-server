@@ -194,13 +194,13 @@ impl Message<RegisterClientRequest> for GameActor {
             },
         );
 
-        let _ = self
+        self
             .room
             .tell(AddClient {
                 uuid,
                 session: session_ref.clone(),
             })
-            .await;
+            .await.ok();
 
         session_ref.tell(SetRoom(self.room.downgrade())).await.ok();
 
