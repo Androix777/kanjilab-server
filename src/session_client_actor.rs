@@ -1,7 +1,7 @@
 // #region IMPORTS
 use kameo::{
     Actor,
-    actor::{Recipient, WeakActorRef},
+    actor::{ActorRef, Recipient, WeakActorRef},
     message::{Context, Message},
 };
 use tracing::{info, warn};
@@ -45,6 +45,23 @@ impl SessionClientActor {
         if let Some(tx) = &self.transport {
             let _ = tx.tell(msg).await;
         }
+    }
+
+    pub async fn send_ws(&self, ws: data_types::WsMessage) {
+        self.send(ToTransport::Ws(ws)).await;
+    }
+
+    async fn send_status<P>(&self, env: &data_types::Message<P>, status: &str) {
+        use data_types::{Message, OutRespStatus, WsMessage};
+
+        let ws = WsMessage::OutRespStatus(Message {
+            correlation_id: env.correlation_id,
+            payload: OutRespStatus {
+                status: status.to_string(),
+            },
+        });
+
+        self.send(ToTransport::Ws(ws)).await;
     }
 
     fn current_challenge_str(&self) -> Option<String> {
@@ -154,10 +171,24 @@ impl Message<WsMessage> for SessionClientActor {
                     pub_key: key,
                     correlation_id: env.correlation_id,
                 };
-                let _ = game.tell(req).try_send();
+                let _ = game.tell(req).await;
             }
 
-            _ => info!("Unknown message: {msg:?}"),
+            WsMessage::InReqClientList(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    let _ = room
+                        .tell(ClientListRequest {
+                            requester: ctx.actor_ref().clone(),
+                            correlation_id: env.correlation_id,
+                        })
+                        .await;
+                } else {
+                    warn!("client asked for clientList but has no room");
+                    self.send_status(&env, "error").await;
+                }
+            }
+
+            _ => warn!("Unknown message: {msg:?}"),
         }
     }
 }

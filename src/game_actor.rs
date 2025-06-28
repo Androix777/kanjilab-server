@@ -36,7 +36,7 @@ impl Actor for GameActor {
     type Error = Infallible;
 
     async fn on_start(_: Self::Args, ar: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let room = RoomActor::spawn_link(&ar, "default".to_string()).await;
+        let room = RoomActor::spawn_link(&ar, ("default".into(), ar.downgrade())).await;
 
         Ok(Self {
             pending_clients: HashMap::new(),
@@ -136,10 +136,16 @@ impl GameActor {
 
 // #region TYPES
 
+#[derive(Clone)]
+pub struct GameClientInfo {
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+}
+
 struct RegisteredClient {
     session: ActorRef<SessionClientActor>,
-    pub_key: String,
-    name: String,
+    info: GameClientInfo,
 }
 // #endregion
 
@@ -190,8 +196,11 @@ impl Message<RegisterClientRequest> for GameActor {
             uuid,
             RegisteredClient {
                 session: session_ref.clone(),
-                pub_key: pub_key.clone(),
-                name: name.clone(),
+                info: GameClientInfo {
+                    id: uuid,
+                    key: pub_key.clone(),
+                    name: name.clone(),
+                },
             },
         );
 
@@ -201,10 +210,10 @@ impl Message<RegisterClientRequest> for GameActor {
                 uuid,
                 session: session_ref.clone(),
             })
-            .try_send();
+            .await;
 
         session_ref
-            .tell(session_client_actor::SetRoom(self.room.clone().downgrade()))
+            .tell(session_client_actor::SetRoom(self.room.downgrade()))
             .await
             .ok();
 
@@ -218,6 +227,24 @@ impl Message<RegisterClientRequest> for GameActor {
         session_ref.tell(SendWs(resp)).await.ok();
 
         info!("client \"{name}\" registered as {uuid}");
+    }
+}
+
+pub struct GetClientsInfo {
+    pub ids: Vec<Uuid>,
+}
+
+impl Message<GetClientsInfo> for GameActor {
+    type Reply = Vec<GameClientInfo>;
+
+    async fn handle(
+        &mut self,
+        GetClientsInfo { ids }: GetClientsInfo,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Vec<GameClientInfo> {
+        ids.into_iter()
+            .filter_map(|id| self.registered_clients.get(&id).map(|c| c.info.clone()))
+            .collect()
     }
 }
 // #endregion

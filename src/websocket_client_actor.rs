@@ -35,7 +35,7 @@ impl WebSocketClientActor {
 
     async fn send_to_session(&self, ws_msg: WsMessage) {
         if let Some(session) = self.session.upgrade() {
-            let _ = session.tell(ws_msg).try_send();
+            let _ = session.tell(ws_msg).await;
         }
     }
 }
