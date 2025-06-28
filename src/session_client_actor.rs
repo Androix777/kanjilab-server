@@ -181,6 +181,36 @@ impl Message<TransportMsg> for SessionClientActor {
                 }
             }
 
+            TransportMsg::InReqSendGameSettings(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(SetGameSettingsRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                        game_settings: env.payload.game_settings.clone(),
+                    })
+                    .await
+                    .ok();
+                } else {
+                    warn!("client asked to change settings but has no room");
+                    self.send_status(&env, "no room").await;
+                }
+            }
+
+            TransportMsg::InReqSendChat(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(SendChatRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                        message: env.payload.message.clone(),
+                    })
+                    .await
+                    .ok();
+                } else {
+                    warn!("client asked to sendChat but has no room");
+                    self.send_status(&env, "no room").await;
+                }
+            }
+
             _ => warn!("Unknown message: {msg:?}"),
         }
     }

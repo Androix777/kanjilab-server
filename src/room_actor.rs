@@ -7,6 +7,7 @@ use kameo::{
     message::{Context, Message},
 };
 use std::{collections::HashMap, ops::ControlFlow};
+use tracing::{debug, error};
 use uuid::Uuid;
 // #endregion
 
@@ -14,6 +15,7 @@ use uuid::Uuid;
 pub struct RoomActor {
     name: String,
     clients: HashMap<Uuid, RoomClient>,
+    game_settings: GameSettings,
     game: WeakActorRef<GameActor>,
 }
 
@@ -25,6 +27,7 @@ impl Actor for RoomActor {
         Ok(Self {
             name,
             clients: HashMap::new(),
+            game_settings: GameSettings::default(),
             game,
         })
     }
@@ -212,4 +215,115 @@ impl Message<ClientListRequest> for RoomActor {
         requester.tell(SendWs(ws)).await.ok();
     }
 }
+
+pub struct SetGameSettingsRequest {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+    pub game_settings: GameSettings,
+}
+
+impl Message<SetGameSettingsRequest> for RoomActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SetGameSettingsRequest {
+            requester,
+            correlation_id,
+            game_settings,
+        }: SetGameSettingsRequest,
+        _ctx: &mut Context<Self, ()>,
+    ) {
+        let Some((&_uuid, client)) = self
+            .clients
+            .iter()
+            .find(|(_, c)| c.session.id() == requester.id())
+        else {
+            error!("no client");
+            return;
+        };
+
+        if !client.room_info.is_admin {
+            requester
+                .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
+                    correlation_id,
+                    payload: OutRespStatus {
+                        status: "not admin".into(),
+                    },
+                })))
+                .await
+                .ok();
+            return;
+        }
+
+        debug!("{game_settings:?}");
+
+        self.game_settings = game_settings.clone();
+
+        requester
+            .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
+                correlation_id,
+                payload: OutRespStatus {
+                    status: "success".into(),
+                },
+            })))
+            .await
+            .ok();
+
+        let notif = TransportMsg::OutNotifGameSettingsChanged(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifGameSettingsChanged { game_settings },
+        });
+        self.broadcast(notif).await;
+    }
+}
+
+pub struct SendChatRequest {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+    pub message: String,
+}
+
+impl Message<SendChatRequest> for RoomActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SendChatRequest {
+            requester,
+            correlation_id,
+            message,
+        }: SendChatRequest,
+        _ctx: &mut Context<Self, ()>,
+    ) {
+        let Some((&sender_uuid, _)) = self
+            .clients
+            .iter()
+            .find(|(_, c)| c.session.id() == requester.id())
+        else {
+            error!("no client");
+            return;
+        };
+
+        requester
+            .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
+                correlation_id,
+                payload: OutRespStatus {
+                    status: "success".into(),
+                },
+            })))
+            .await
+            .ok();
+
+        let notif = TransportMsg::OutNotifChatSent(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifChatSent {
+                id: sender_uuid.to_string(),
+                message: message.clone(),
+            },
+        });
+        self.broadcast(notif).await;
+    }
+}
+
 // #endregion
