@@ -6,16 +6,21 @@ use kameo::{
     error::{ActorStopReason, Infallible},
     message::{Context, Message},
 };
-use std::{collections::HashMap, ops::ControlFlow, time::Duration};
-use tracing::{debug, error, warn};
+use std::{
+    collections::HashMap,
+    ops::ControlFlow,
+    time::{Duration, Instant},
+};
+use tracing::{error, warn};
 use uuid::Uuid;
 // #endregion
 
 // #region ACTOR
 
 #[derive(Copy, Clone, PartialEq)]
-enum Kind {
+enum RoomPending {
     Question,
+    Round,
 }
 
 pub struct RoomActor {
@@ -24,8 +29,13 @@ pub struct RoomActor {
     game_settings: GameSettings,
     game: WeakActorRef<GameActor>,
 
+    current_question: Option<QuestionInfo>,
+    current_answers: Vec<AnswerInfo>,
+
     is_game_running: bool,
-    pending: PendingTracker<Self, Kind>,
+    round_ticket: Option<Ticket<RoomPending>>,
+    pending: PendingTracker<Self, RoomPending>,
+    round_start: Option<Instant>,
 }
 
 impl Actor for RoomActor {
@@ -38,8 +48,12 @@ impl Actor for RoomActor {
             clients: HashMap::new(),
             game_settings: GameSettings::default(),
             game,
+            current_question: None,
+            current_answers: Vec::new(),
             is_game_running: false,
+            round_ticket: None,
             pending: PendingTracker::new(ar.downgrade()),
+            round_start: None,
         })
     }
 
@@ -125,6 +139,43 @@ impl RoomActor {
         });
         self.broadcast(ws).await;
     }
+
+    async fn finish_round(&mut self) {
+        if !self.is_game_running {
+            return;
+        }
+
+        let notif = TransportMsg::OutNotifRoundEnded(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifRoundEnded {
+                question: self.current_question.clone().unwrap_or_default(),
+                answers: self.current_answers.clone(),
+            },
+        });
+        self.broadcast(notif).await;
+
+        self.current_question = None;
+        self.current_answers.clear();
+        self.round_ticket = None;
+        self.round_start = None;
+
+        let Some((&admin_uuid, admin)) = self.clients.iter().find(|(_, c)| c.room_info.is_admin)
+        else {
+            warn!("no admin left – stopping game");
+            self.is_game_running = false;
+            return;
+        };
+
+        let corr_id = self
+            .pending
+            .add(RoomPending::Question, admin_uuid, Duration::from_secs(10));
+
+        let req = TransportMsg::OutReqQuestion(TransportEnvelope {
+            correlation_id: corr_id.into(),
+            payload: OutReqQuestion {},
+        });
+        admin.session.tell(SendWs(req)).await.ok();
+    }
 }
 
 // #endregion
@@ -146,10 +197,14 @@ struct RoomClient {
 impl Message<Timeout> for RoomActor {
     type Reply = ();
     async fn handle(&mut self, Timeout(id): Timeout, _ctx: &mut Context<Self, ()>) {
-        if let Some(meta) = self.pending.take(&id) {
+        if let Some(meta) = self.pending.take(id.into()) {
             match meta.kind {
-                Kind::Question => {
-                    tracing::warn!("admin {} didn't provide question in time", meta.who);
+                RoomPending::Question => {
+                    warn!("admin {} didn't provide question in time", meta.who);
+                }
+                RoomPending::Round => {
+                    self.round_ticket = None;
+                    self.finish_round().await;
                 }
             }
         }
@@ -385,6 +440,9 @@ impl Message<StartGameRequest> for RoomActor {
             return;
         }
 
+        self.current_question = None;
+        self.current_answers.clear();
+        self.round_ticket = None;
         self.game_settings = game_settings.clone();
         self.is_game_running = true;
 
@@ -397,12 +455,12 @@ impl Message<StartGameRequest> for RoomActor {
         });
         self.broadcast(notif).await;
 
-        let corr_id = self
-            .pending
-            .add(Kind::Question, admin_uuid, Duration::from_secs(10));
+        let ticket_question =
+            self.pending
+                .add(RoomPending::Question, admin_uuid, Duration::from_secs(10));
 
         let req = TransportMsg::OutReqQuestion(TransportEnvelope {
-            correlation_id: corr_id,
+            correlation_id: ticket_question.into(),
             payload: OutReqQuestion {},
         });
         admin_session.tell(SendWs(req)).await.ok();
@@ -423,25 +481,114 @@ impl Message<ProvideQuestionResponse> for RoomActor {
         let ProvideQuestionResponse {
             requester,
             correlation_id,
-            question_info: _,
+            question_info,
             question_svg,
         } = msg;
 
-        match self.pending.take(&correlation_id) {
+        match self.pending.take(correlation_id.into()) {
             Some(meta)
-                if matches!(meta.kind, Kind::Question)
+                if matches!(meta.kind, RoomPending::Question)
                     && requester.id() == self.clients[&meta.who].session.id() =>
             {
+                self.current_question = Some(question_info.clone());
+                self.current_answers.clear();
+
                 let notif = TransportMsg::OutNotifQuestion(TransportEnvelope {
                     correlation_id: Uuid::new_v4(),
                     payload: OutNotifQuestion { question_svg },
                 });
                 self.broadcast(notif).await;
-            }
 
-            _ => {
-                warn!("unexpected or late IN_RESP_question (id = {correlation_id})");
+                self.round_start = Some(Instant::now());
+
+                let ticket = self.pending.add(
+                    RoomPending::Round,
+                    Uuid::nil(),
+                    Duration::from_secs(self.game_settings.round_duration.max(1)),
+                );
+                self.round_ticket = Some(ticket);
             }
+            _ => warn!("unexpected or late IN_RESP_question (id = {correlation_id})"),
         }
     }
 }
+
+#[derive(Debug)]
+pub struct SendAnswerRequest {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+    pub answer: String,
+}
+
+impl Message<SendAnswerRequest> for RoomActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SendAnswerRequest {
+            requester,
+            correlation_id,
+            answer,
+        }: SendAnswerRequest,
+        _ctx: &mut Context<Self, ()>,
+    ) {
+        let Some((&uuid, _)) = self
+            .clients
+            .iter()
+            .find(|(_, c)| c.session.id() == requester.id())
+        else {
+            error!("no client");
+            return;
+        };
+
+        if !self.is_game_running || self.current_question.is_none() {
+            self.reply_status(&requester, correlation_id, "no active round")
+                .await;
+            warn!("no active round");
+            return;
+        }
+
+        if self
+            .current_answers
+            .iter()
+            .any(|a| a.id == uuid.to_string())
+        {
+            self.reply_status(&requester, correlation_id, "already answered")
+                .await;
+            warn!("already answered");
+            return;
+        }
+
+        let elapsed = self
+            .round_start
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0);
+
+        self.current_answers.push(AnswerInfo {
+            id: uuid.to_string(),
+            answer: answer.clone(),
+            is_correct: false,
+            answer_time: elapsed,
+        });
+
+        self.reply_status(&requester, correlation_id, "success")
+            .await;
+
+        let notif = TransportMsg::OutNotifClientAnswered(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifClientAnswered {
+                id: uuid.to_string(),
+            },
+        });
+        self.broadcast(notif).await;
+
+        if self.current_answers.len() == self.clients.len() {
+            if let Some(ticket) = self.round_ticket.take() {
+                self.pending.cancel(ticket);
+            }
+            self.finish_round().await;
+        }
+    }
+}
+
+// #endregion

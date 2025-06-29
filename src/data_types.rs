@@ -119,7 +119,7 @@ pub struct ClientInfo {
     pub is_admin: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionInfo {
     pub word_info: WordInfo,
@@ -149,7 +149,7 @@ pub struct ReadingWithParts {
     pub parts: Vec<WordPartInfo>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WordInfo {
     pub word: String,

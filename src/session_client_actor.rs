@@ -238,6 +238,20 @@ impl Message<TransportMsg> for SessionClientActor {
                 }
             }
 
+            TransportMsg::InReqSendAnswer(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(SendAnswerRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                        answer: env.payload.answer.clone(),
+                    })
+                    .await
+                    .ok();
+                } else {
+                    self.send_status(&env, "no room").await;
+                }
+            }
+
             _ => error!("Unknown message: {msg:?}"),
         }
     }

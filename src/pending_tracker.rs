@@ -1,10 +1,38 @@
 use kameo::{Actor, message::Message};
 use std::{
     collections::HashMap,
+    marker::PhantomData,
     time::{Duration, Instant},
 };
 use tokio::time;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct Ticket<K> {
+    id: Uuid,
+    _k: PhantomData<K>,
+}
+
+impl<K> Ticket<K> {
+    fn new(id: Uuid) -> Self {
+        Self {
+            id,
+            _k: PhantomData,
+        }
+    }
+}
+
+impl<K> From<Ticket<K>> for Uuid {
+    fn from(t: Ticket<K>) -> Self {
+        t.id
+    }
+}
+
+impl<K> From<Uuid> for Ticket<K> {
+    fn from(id: Uuid) -> Self {
+        Ticket::new(id)
+    }
+}
 
 pub struct Timeout(pub Uuid);
 
@@ -36,7 +64,7 @@ where
         }
     }
 
-    pub fn add(&mut self, kind: K, who: Uuid, dur: Duration) -> Uuid {
+    pub fn add(&mut self, kind: K, who: Uuid, dur: Duration) -> Ticket<K> {
         let id = Uuid::new_v4();
         self.map.insert(
             id,
@@ -56,10 +84,14 @@ where
             }
         });
 
-        id
+        Ticket::new(id)
     }
 
-    pub fn take(&mut self, id: &Uuid) -> Option<PendingMeta<K>> {
-        self.map.remove(id)
+    pub fn take(&mut self, ticket: Ticket<K>) -> Option<PendingMeta<K>> {
+        self.map.remove(&ticket.id)
+    }
+
+    pub fn cancel(&mut self, ticket: Ticket<K>) -> bool {
+        self.map.remove(&ticket.id).is_some()
     }
 }
