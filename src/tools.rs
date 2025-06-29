@@ -1,5 +1,7 @@
 use base64::{Engine, prelude::BASE64_STANDARD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use tracing::Level;
+use tracing_subscriber::fmt::time::LocalTime;
 
 pub fn verify_signature(message: &str, signature: &str, key: &str) -> Result<bool, String> {
     let public_key_bytes = BASE64_STANDARD
@@ -14,4 +16,16 @@ pub fn verify_signature(message: &str, signature: &str, key: &str) -> Result<boo
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
 
     Ok(verifying_key.verify(message.as_bytes(), &signature).is_ok())
+}
+
+pub fn setup_tracing() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .with_target(false)
+        .with_timer(LocalTime::new(time::macros::format_description!(
+            "[hour]:[minute]:[second].[subsecond digits:3]"
+        )))
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global logger");
 }

@@ -1,34 +1,45 @@
 // #region IMPORTS
-use crate::{data_types::*, game_actor::*, session_client_actor::*};
+use crate::{data_types::*, game_actor::*, pending_tracker::*, session_client_actor::*};
 use kameo::{
     Actor,
     actor::{ActorID, ActorRef, WeakActorRef},
     error::{ActorStopReason, Infallible},
     message::{Context, Message},
 };
-use std::{collections::HashMap, ops::ControlFlow};
-use tracing::{debug, error};
+use std::{collections::HashMap, ops::ControlFlow, time::Duration};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 // #endregion
 
 // #region ACTOR
+
+#[derive(Copy, Clone, PartialEq)]
+enum Kind {
+    Question, /*, ScoreSheet, … */
+}
+
 pub struct RoomActor {
     name: String,
     clients: HashMap<Uuid, RoomClient>,
     game_settings: GameSettings,
     game: WeakActorRef<GameActor>,
+
+    is_game_running: bool,
+    pending: PendingTracker<Self, Kind>,
 }
 
 impl Actor for RoomActor {
     type Args = (String, WeakActorRef<GameActor>);
     type Error = Infallible;
 
-    async fn on_start((name, game): Self::Args, _ar: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start((name, game): Self::Args, ar: ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(Self {
             name,
             clients: HashMap::new(),
             game_settings: GameSettings::default(),
             game,
+            is_game_running: false,
+            pending: PendingTracker::new(ar.downgrade()),
         })
     }
 
@@ -67,6 +78,23 @@ impl RoomActor {
         for RoomClient { session, .. } in self.clients.values() {
             session.tell(SendWs(ws.clone())).await.ok();
         }
+    }
+
+    async fn reply_status(
+        &self,
+        session: &ActorRef<SessionClientActor>,
+        correlation_id: Uuid,
+        status: &str,
+    ) {
+        session
+            .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
+                correlation_id,
+                payload: OutRespStatus {
+                    status: status.to_string(),
+                },
+            })))
+            .await
+            .ok();
     }
 
     async fn notif_client_registered(&self, client_info: ClientInfo) {
@@ -115,6 +143,19 @@ struct RoomClient {
 // #endregion
 
 // #region MESSAGES
+impl Message<Timeout> for RoomActor {
+    type Reply = ();
+    async fn handle(&mut self, Timeout(id): Timeout, _ctx: &mut Context<Self, ()>) {
+        if let Some(meta) = self.pending.take(&id) {
+            match meta.kind {
+                Kind::Question => {
+                    tracing::warn!("admin {} didn't provide question in time", meta.who);
+                }
+            }
+        }
+    }
+}
+
 pub struct AddClient {
     pub uuid: Uuid,
     pub session: ActorRef<SessionClientActor>,
@@ -244,31 +285,13 @@ impl Message<SetGameSettingsRequest> for RoomActor {
         };
 
         if !client.room_info.is_admin {
-            requester
-                .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
-                    correlation_id,
-                    payload: OutRespStatus {
-                        status: "not admin".into(),
-                    },
-                })))
-                .await
-                .ok();
-            return;
+            self.reply_status(&requester, correlation_id, "not admin")
+                .await;
         }
 
-        debug!("{game_settings:?}");
-
         self.game_settings = game_settings.clone();
-
-        requester
-            .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
-                correlation_id,
-                payload: OutRespStatus {
-                    status: "success".into(),
-                },
-            })))
-            .await
-            .ok();
+        self.reply_status(&requester, correlation_id, "success")
+            .await;
 
         let notif = TransportMsg::OutNotifGameSettingsChanged(TransportEnvelope {
             correlation_id: Uuid::new_v4(),
@@ -305,15 +328,8 @@ impl Message<SendChatRequest> for RoomActor {
             return;
         };
 
-        requester
-            .tell(SendWs(TransportMsg::OutRespStatus(TransportEnvelope {
-                correlation_id,
-                payload: OutRespStatus {
-                    status: "success".into(),
-                },
-            })))
-            .await
-            .ok();
+        self.reply_status(&requester, correlation_id, "success")
+            .await;
 
         let notif = TransportMsg::OutNotifChatSent(TransportEnvelope {
             correlation_id: Uuid::new_v4(),
@@ -326,4 +342,106 @@ impl Message<SendChatRequest> for RoomActor {
     }
 }
 
-// #endregion
+pub struct StartGameRequest {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+    pub game_settings: GameSettings,
+}
+
+impl Message<StartGameRequest> for RoomActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        StartGameRequest {
+            requester,
+            correlation_id,
+            game_settings,
+        }: StartGameRequest,
+        _ctx: &mut Context<Self, ()>,
+    ) {
+        let Some((&admin_uuid, client)) = self
+            .clients
+            .iter()
+            .find(|(_, c)| c.session.id() == requester.id())
+        else {
+            error!("no client");
+            return;
+        };
+
+        if !client.room_info.is_admin {
+            self.reply_status(&requester, correlation_id, "not admin")
+                .await;
+            warn!("not admin");
+            return;
+        }
+
+        let admin_session = client.session.clone();
+
+        if self.is_game_running {
+            self.reply_status(&requester, correlation_id, "already running")
+                .await;
+            warn!("already running");
+            return;
+        }
+
+        self.game_settings = game_settings.clone();
+        self.is_game_running = true;
+
+        self.reply_status(&requester, correlation_id, "success")
+            .await;
+
+        let notif = TransportMsg::OutNotifGameStarted(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifGameStarted { game_settings },
+        });
+        self.broadcast(notif).await;
+
+        let corr_id = self
+            .pending
+            .add(Kind::Question, admin_uuid, Duration::from_secs(10));
+
+        let req = TransportMsg::OutReqQuestion(TransportEnvelope {
+            correlation_id: corr_id,
+            payload: OutReqQuestion {},
+        });
+        admin_session.tell(SendWs(req)).await.ok();
+    }
+}
+
+pub struct ProvideQuestionResponse {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+    pub question_info: QuestionInfo,
+    pub question_svg: String,
+}
+
+impl Message<ProvideQuestionResponse> for RoomActor {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: ProvideQuestionResponse, _ctx: &mut Context<Self, ()>) {
+        let ProvideQuestionResponse {
+            requester,
+            correlation_id,
+            question_info: _,
+            question_svg,
+        } = msg;
+
+        match self.pending.take(&correlation_id) {
+            Some(meta)
+                if matches!(meta.kind, Kind::Question)
+                    && requester.id() == self.clients[&meta.who].session.id() =>
+            {
+                let notif = TransportMsg::OutNotifQuestion(TransportEnvelope {
+                    correlation_id: Uuid::new_v4(),
+                    payload: OutNotifQuestion { question_svg },
+                });
+                self.broadcast(notif).await;
+            }
+
+            _ => {
+                warn!("unexpected or late IN_RESP_question (id = {correlation_id})");
+            }
+        }
+    }
+}

@@ -1,8 +1,6 @@
 use kameo::Actor;
-use kanjilab_server::game_actor::{GameActor, NewClient};
+use kanjilab_server::{game_actor::{GameActor, NewClient}, tools::setup_tracing};
 use tokio::net::TcpListener;
-use tracing::Level;
-use tracing_subscriber::fmt::time::LocalTime;
 
 #[tokio::main]
 async fn main() {
@@ -19,16 +17,4 @@ async fn main() {
             game_clone.tell(NewClient(stream)).await.ok();
         });
     }
-}
-
-fn setup_tracing() {
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .with_target(false)
-        .with_timer(LocalTime::new(time::macros::format_description!(
-            "[hour]:[minute]:[second].[subsecond digits:3]"
-        )))
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global logger");
 }

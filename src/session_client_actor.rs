@@ -5,7 +5,7 @@ use kameo::{
     actor::{Recipient, WeakActorRef},
     message::{Context, Message},
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 // #endregion
 
@@ -211,7 +211,34 @@ impl Message<TransportMsg> for SessionClientActor {
                 }
             }
 
-            _ => warn!("Unknown message: {msg:?}"),
+            TransportMsg::InReqStartGame(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(StartGameRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                        game_settings: env.payload.game_settings.clone(),
+                    })
+                    .await
+                    .ok();
+                } else {
+                    self.send_status(&env, "no room").await;
+                }
+            }
+
+            TransportMsg::InRespQuestion(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(ProvideQuestionResponse {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
+                        question_info: env.payload.question.clone(),
+                        question_svg: env.payload.question_svg.clone(),
+                    })
+                    .await
+                    .ok();
+                }
+            }
+
+            _ => error!("Unknown message: {msg:?}"),
         }
     }
 }
