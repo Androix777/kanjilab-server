@@ -88,6 +88,16 @@ impl Actor for RoomActor {
 }
 
 impl RoomActor {
+    fn find_client(
+        &self,
+        session_id: ActorID,
+    ) -> Option<(Uuid, RoomClientInfo, ActorRef<SessionClientActor>)> {
+        self.clients
+            .iter()
+            .find(|(_, c)| c.session.id() == session_id)
+            .map(|(&uuid, c)| (uuid, c.room_info, c.session.clone()))
+    }
+
     async fn broadcast(&self, ws: TransportMsg) {
         for RoomClient { session, .. } in self.clients.values() {
             session.tell(SendWs(ws.clone())).await.ok();
@@ -159,6 +169,10 @@ impl RoomActor {
         self.round_ticket = None;
         self.round_start = None;
 
+        self.request_question().await;
+    }
+
+    async fn request_question(&mut self) {
         let Some((&admin_uuid, admin)) = self.clients.iter().find(|(_, c)| c.room_info.is_admin)
         else {
             warn!("no admin left – stopping game");
@@ -168,7 +182,7 @@ impl RoomActor {
 
         let corr_id = self
             .pending
-            .add(RoomPending::Question, admin_uuid, Duration::from_secs(10));
+            .add(RoomPending::Question, admin_uuid, Duration::from_secs(5));
 
         let req = TransportMsg::OutReqQuestion(TransportEnvelope {
             correlation_id: corr_id.into(),
@@ -181,7 +195,7 @@ impl RoomActor {
 // #endregion
 
 // #region TYPES
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RoomClientInfo {
     pub is_admin: bool,
 }
@@ -330,18 +344,15 @@ impl Message<SetGameSettingsRequest> for RoomActor {
         }: SetGameSettingsRequest,
         _ctx: &mut Context<Self, ()>,
     ) {
-        let Some((&_uuid, client)) = self
-            .clients
-            .iter()
-            .find(|(_, c)| c.session.id() == requester.id())
-        else {
+        let Some((_, room_info, _)) = self.find_client(requester.id()) else {
             error!("no client");
             return;
         };
 
-        if !client.room_info.is_admin {
+        if !room_info.is_admin {
             self.reply_status(&requester, correlation_id, "not admin")
                 .await;
+            return;
         }
 
         self.game_settings = game_settings.clone();
@@ -374,11 +385,7 @@ impl Message<SendChatRequest> for RoomActor {
         }: SendChatRequest,
         _ctx: &mut Context<Self, ()>,
     ) {
-        let Some((&sender_uuid, _)) = self
-            .clients
-            .iter()
-            .find(|(_, c)| c.session.id() == requester.id())
-        else {
+        let Some((sender_uuid, _, _)) = self.find_client(requester.id()) else {
             error!("no client");
             return;
         };
@@ -415,23 +422,18 @@ impl Message<StartGameRequest> for RoomActor {
         }: StartGameRequest,
         _ctx: &mut Context<Self, ()>,
     ) {
-        let Some((&admin_uuid, client)) = self
-            .clients
-            .iter()
-            .find(|(_, c)| c.session.id() == requester.id())
+        let Some((_admin_uuid, room_info, _admin_session)) = self.find_client(requester.id())
         else {
             error!("no client");
             return;
         };
 
-        if !client.room_info.is_admin {
+        if !room_info.is_admin {
             self.reply_status(&requester, correlation_id, "not admin")
                 .await;
             warn!("not admin");
             return;
         }
-
-        let admin_session = client.session.clone();
 
         if self.is_game_running {
             self.reply_status(&requester, correlation_id, "already running")
@@ -455,15 +457,7 @@ impl Message<StartGameRequest> for RoomActor {
         });
         self.broadcast(notif).await;
 
-        let ticket_question =
-            self.pending
-                .add(RoomPending::Question, admin_uuid, Duration::from_secs(10));
-
-        let req = TransportMsg::OutReqQuestion(TransportEnvelope {
-            correlation_id: ticket_question.into(),
-            payload: OutReqQuestion {},
-        });
-        admin_session.tell(SendWs(req)).await.ok();
+        self.request_question().await;
     }
 }
 
@@ -532,11 +526,7 @@ impl Message<SendAnswerRequest> for RoomActor {
         }: SendAnswerRequest,
         _ctx: &mut Context<Self, ()>,
     ) {
-        let Some((&uuid, _)) = self
-            .clients
-            .iter()
-            .find(|(_, c)| c.session.id() == requester.id())
-        else {
+        let Some((uuid, _, _)) = self.find_client(requester.id()) else {
             error!("no client");
             return;
         };
