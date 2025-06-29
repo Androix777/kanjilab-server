@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 #[derive(Copy, Clone, PartialEq)]
 enum Kind {
-    Question, /*, ScoreSheet, … */
+    Question,
 }
 
 pub struct RoomActor {
