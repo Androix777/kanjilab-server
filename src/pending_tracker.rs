@@ -38,7 +38,6 @@ pub struct Timeout(pub Uuid);
 
 pub struct PendingMeta<K> {
     pub kind: K,
-    pub who: Uuid,
     pub sent: Instant,
     pub t_out: Duration,
 }
@@ -64,13 +63,12 @@ where
         }
     }
 
-    pub fn add(&mut self, kind: K, who: Uuid, dur: Duration) -> Ticket<K> {
+    pub fn add(&mut self, kind: K, dur: Duration) -> Ticket<K> {
         let id = Uuid::new_v4();
         self.map.insert(
             id,
             PendingMeta {
                 kind,
-                who,
                 sent: Instant::now(),
                 t_out: dur,
             },

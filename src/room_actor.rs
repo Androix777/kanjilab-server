@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 #[derive(Copy, Clone, PartialEq)]
 enum RoomPending {
-    Question,
+    Question { uuid: Uuid },
     Round,
 }
 
@@ -180,9 +180,10 @@ impl RoomActor {
             return;
         };
 
-        let corr_id = self
-            .pending
-            .add(RoomPending::Question, admin_uuid, Duration::from_secs(5));
+        let corr_id = self.pending.add(
+            RoomPending::Question { uuid: admin_uuid },
+            Duration::from_secs(5),
+        );
 
         let req = TransportMsg::OutReqQuestion(TransportEnvelope {
             correlation_id: corr_id.into(),
@@ -213,8 +214,8 @@ impl Message<Timeout> for RoomActor {
     async fn handle(&mut self, Timeout(id): Timeout, _ctx: &mut Context<Self, ()>) {
         if let Some(meta) = self.pending.take(id.into()) {
             match meta.kind {
-                RoomPending::Question => {
-                    warn!("admin {} didn't provide question in time", meta.who);
+                RoomPending::Question { uuid } => {
+                    warn!("admin {} didn't provide question in time", uuid);
                 }
                 RoomPending::Round => {
                     self.round_ticket = None;
@@ -480,10 +481,10 @@ impl Message<ProvideQuestionResponse> for RoomActor {
         } = msg;
 
         match self.pending.take(correlation_id.into()) {
-            Some(meta)
-                if matches!(meta.kind, RoomPending::Question)
-                    && requester.id() == self.clients[&meta.who].session.id() =>
-            {
+            Some(PendingMeta {
+                kind: RoomPending::Question { uuid },
+                ..
+            }) if requester.id() == self.clients[&uuid].session.id() => {
                 self.current_question = Some(question_info.clone());
                 self.current_answers.clear();
 
@@ -497,11 +498,11 @@ impl Message<ProvideQuestionResponse> for RoomActor {
 
                 let ticket = self.pending.add(
                     RoomPending::Round,
-                    Uuid::nil(),
                     Duration::from_secs(self.game_settings.round_duration.max(1)),
                 );
                 self.round_ticket = Some(ticket);
             }
+
             _ => warn!("unexpected or late IN_RESP_question (id = {correlation_id})"),
         }
     }
