@@ -547,7 +547,7 @@ impl Message<ProvideQuestionResponse> for RoomActor {
 
                 let ticket = self.pending.add(
                     RoomPending::Round,
-                    Duration::from_secs(self.game_settings.round_duration.max(1)),
+                    Duration::from_secs(self.game_settings.round_duration),
                 );
                 self.round_ticket = Some(ticket);
             }

@@ -1,20 +1,8 @@
-use kameo::Actor;
-use kanjilab_server::{game_actor::{GameActor, NewClient}, tools::setup_tracing};
-use tokio::net::TcpListener;
-
 #[tokio::main]
-async fn main() {
-    setup_tracing();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    kanjilab_server::call_launch_server("8080")?;
+    tokio::signal::ctrl_c().await?;
+    kanjilab_server::call_stop_server()?;
 
-    let game = GameActor::spawn(());
-
-    let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
-    loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        let game_clone = game.clone();
-
-        tokio::spawn(async move {
-            game_clone.tell(NewClient(stream)).await.ok();
-        });
-    }
+    Ok(())
 }
