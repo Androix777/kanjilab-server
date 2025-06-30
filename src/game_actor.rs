@@ -13,7 +13,7 @@ use tokio_tungstenite::{
     accept_async,
     tungstenite::{Error as WsErr, Message as WsMsg},
 };
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 use uuid::Uuid;
 // #endregion
 
@@ -53,7 +53,6 @@ impl Actor for GameActor {
         }
         if let Some(uuid) = uuid_to_remove {
             self.pending_clients.remove(&uuid);
-            info!("pending client {uuid} disconnected: {reason:?}");
             return Ok(ControlFlow::Continue(()));
         }
 
@@ -66,7 +65,6 @@ impl Actor for GameActor {
         }
         if let Some(uuid) = uuid_to_remove {
             self.registered_clients.remove(&uuid);
-            info!("registered client {uuid} disconnected: {reason:?}");
             return Ok(ControlFlow::Continue(()));
         }
 
@@ -114,11 +112,6 @@ impl GameActor {
 
         let client_uuid = Uuid::new_v4();
         self.pending_clients.insert(client_uuid, session_ref);
-
-        info!(
-            "client connected (total = {})",
-            self.pending_clients.len() + self.registered_clients.len()
-        );
         Ok(())
     }
 }
@@ -212,8 +205,6 @@ impl Message<RegisterClientRequest> for GameActor {
             },
         });
         session_ref.tell(SendWs(resp)).await.ok();
-
-        info!("client \"{name}\" registered as {uuid}");
     }
 }
 

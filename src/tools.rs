@@ -20,7 +20,7 @@ pub fn verify_signature(message: &str, signature: &str, key: &str) -> Result<boo
 
 pub fn setup_tracing() {
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_max_level(Level::DEBUG)
         .with_target(false)
         .with_timer(LocalTime::new(time::macros::format_description!(
             "[hour]:[minute]:[second].[subsecond digits:3]"

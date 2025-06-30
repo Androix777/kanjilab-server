@@ -72,7 +72,7 @@ impl Message<StreamItem> for WebSocketClientActor {
 #[derive(Debug)]
 pub enum ToTransport {
     Raw(String),
-    Ws(TransportMsg),
+    TransportMsg(TransportMsg),
 }
 
 impl Message<ToTransport> for WebSocketClientActor {
@@ -83,7 +83,7 @@ impl Message<ToTransport> for WebSocketClientActor {
             ToTransport::Raw(text) => {
                 self.write.send(WsMsg::Text(text.into())).await.ok();
             }
-            ToTransport::Ws(ws_msg) => match serialize(&ws_msg) {
+            ToTransport::TransportMsg(ws_msg) => match serialize(&ws_msg) {
                 Ok(text) => {
                     self.write.send(WsMsg::Text(text.into())).await.ok();
                 }

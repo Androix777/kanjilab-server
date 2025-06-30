@@ -246,7 +246,7 @@ pub struct InReqSendGameSettings {
 #[serde(rename_all = "camelCase")]
 pub struct OutRespClientRegistered {
     pub id: String,
-    pub game_settings: GameSettings,
+    pub game_settings: GameSettings, // TODO delete
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

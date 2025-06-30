@@ -5,7 +5,7 @@ use kameo::{
     actor::{Recipient, WeakActorRef},
     message::{Context, Message},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 // #endregion
 
@@ -40,8 +40,8 @@ impl SessionClientActor {
         }
     }
 
-    pub async fn send_ws(&self, ws: TransportMsg) {
-        self.send(ToTransport::Ws(ws)).await;
+    pub async fn send_transport(&self, ws: TransportMsg) {
+        self.send(ToTransport::TransportMsg(ws)).await;
     }
 
     async fn send_status<P>(&self, env: &TransportEnvelope<P>, status: &str) {
@@ -52,7 +52,7 @@ impl SessionClientActor {
             },
         });
 
-        self.send(ToTransport::Ws(ws)).await;
+        self.send(ToTransport::TransportMsg(ws)).await;
     }
 
     fn current_challenge_str(&self) -> Option<String> {
@@ -74,7 +74,7 @@ pub struct SendWs(pub TransportMsg);
 impl Message<SendWs> for SessionClientActor {
     type Reply = ();
     async fn handle(&mut self, SendWs(ws): SendWs, _ctx: &mut Context<Self, Self::Reply>) {
-        self.send(ToTransport::Ws(ws)).await;
+        self.send(ToTransport::TransportMsg(ws)).await;
     }
 }
 
@@ -84,7 +84,7 @@ impl Message<TransportMsg> for SessionClientActor {
     async fn handle(&mut self, msg: TransportMsg, ctx: &mut Context<Self, Self::Reply>) {
         match msg {
             TransportMsg::InReqSendPublicKey(env) => {
-                info!("IN_REQ_sendPublicKey, key = {}", env.payload.key);
+                debug!("IN_REQ_sendPublicKey {}", env.payload.key);
 
                 if self.signature_verified {
                     warn!("signature already verified");
@@ -102,11 +102,11 @@ impl Message<TransportMsg> for SessionClientActor {
                         message: challenge.to_string(),
                     },
                 });
-                self.send(ToTransport::Ws(resp)).await;
+                self.send(ToTransport::TransportMsg(resp)).await;
             }
 
             TransportMsg::InReqVerifySignature(env) => {
-                info!("IN_REQ_verifySignature");
+                debug!("IN_REQ_verifySignature {}", env.payload.signature);
 
                 let Some(challenge) = self.current_challenge_str() else {
                     warn!("no stored challenge");
@@ -137,10 +137,11 @@ impl Message<TransportMsg> for SessionClientActor {
                         status: status_text,
                     },
                 });
-                self.send(ToTransport::Ws(resp)).await;
+                self.send(ToTransport::TransportMsg(resp)).await;
             }
 
             TransportMsg::InReqRegisterClient(env) => {
+                debug!("IN_REQ_registerClient {}", env.payload.name);
                 if !self.signature_verified {
                     warn!("register requested before signature verified");
                     self.send_status(&env, "error").await;
@@ -168,6 +169,7 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InReqClientList(env) => {
+                debug!("IN_REQ_clientList");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(ClientListRequest {
                         requester: ctx.actor_ref().clone(),
@@ -182,6 +184,7 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InReqSendGameSettings(env) => {
+                debug!("IN_REQ_sendGameSettings");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(SetGameSettingsRequest {
                         requester: ctx.actor_ref().clone(),
@@ -197,6 +200,7 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InReqSendChat(env) => {
+                debug!("IN_REQ_sendChat");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(SendChatRequest {
                         requester: ctx.actor_ref().clone(),
@@ -212,6 +216,7 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InReqStartGame(env) => {
+                debug!("IN_REQ_startGame");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(StartGameRequest {
                         requester: ctx.actor_ref().clone(),
@@ -226,6 +231,7 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InRespQuestion(env) => {
+                debug!("IN_RESP_question");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(ProvideQuestionResponse {
                         requester: ctx.actor_ref().clone(),
@@ -239,11 +245,25 @@ impl Message<TransportMsg> for SessionClientActor {
             }
 
             TransportMsg::InReqSendAnswer(env) => {
+                debug!("IN_REQ_sendAnswer");
                 if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
                     room.tell(SendAnswerRequest {
                         requester: ctx.actor_ref().clone(),
                         correlation_id: env.correlation_id,
                         answer: env.payload.answer.clone(),
+                    })
+                    .await
+                    .ok();
+                } else {
+                    self.send_status(&env, "no room").await;
+                }
+            }
+
+            TransportMsg::InReqStopGame(env) => {
+                if let Some(room) = self.room.as_ref().and_then(|r| r.upgrade()) {
+                    room.tell(StopGameRequest {
+                        requester: ctx.actor_ref().clone(),
+                        correlation_id: env.correlation_id,
                     })
                     .await
                     .ok();

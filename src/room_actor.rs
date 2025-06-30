@@ -36,6 +36,7 @@ pub struct RoomActor {
     round_ticket: Option<Ticket<RoomPending>>,
     pending: PendingTracker<Self, RoomPending>,
     round_start: Option<Instant>,
+    rounds_played: u64,
 }
 
 impl Actor for RoomActor {
@@ -54,6 +55,7 @@ impl Actor for RoomActor {
             round_ticket: None,
             pending: PendingTracker::new(ar.downgrade()),
             round_start: None,
+            rounds_played: 0,
         })
     }
 
@@ -155,6 +157,8 @@ impl RoomActor {
             return;
         }
 
+        self.push_missing_answers();
+
         let notif = TransportMsg::OutNotifRoundEnded(TransportEnvelope {
             correlation_id: Uuid::new_v4(),
             payload: OutNotifRoundEnded {
@@ -168,6 +172,22 @@ impl RoomActor {
         self.current_answers.clear();
         self.round_ticket = None;
         self.round_start = None;
+
+        self.rounds_played += 1;
+
+        if self.rounds_played >= self.game_settings.rounds_count {
+            self.is_game_running = false;
+
+            let stop_notif = TransportMsg::OutNotifGameStopped(TransportEnvelope {
+                correlation_id: Uuid::new_v4(),
+                payload: OutNotifGameStopped {
+                    question: QuestionInfo::default(),
+                    answers: Vec::new(),
+                },
+            });
+            self.broadcast(stop_notif).await;
+            return;
+        }
 
         self.request_question().await;
     }
@@ -190,6 +210,26 @@ impl RoomActor {
             payload: OutReqQuestion {},
         });
         admin.session.tell(SendWs(req)).await.ok();
+    }
+
+    fn push_missing_answers(&mut self) {
+        let answered: std::collections::HashSet<String> =
+            self.current_answers.iter().map(|a| a.id.clone()).collect();
+
+        let max_time = self.game_settings.round_duration * 1_000;
+
+        for uuid in self.clients.keys() {
+            let id = uuid.to_string();
+            if answered.contains(&id) {
+                continue;
+            }
+            self.current_answers.push(AnswerInfo {
+                id,
+                answer: String::new(),
+                is_correct: false,
+                answer_time: max_time,
+            });
+        }
     }
 }
 
@@ -269,6 +309,14 @@ impl Message<AddClient> for RoomActor {
         self.notif_client_registered(client_info).await;
         if is_admin {
             self.notif_admin_made(uuid).await;
+        } else {
+            let notif = TransportMsg::OutNotifGameSettingsChanged(TransportEnvelope {
+                correlation_id: Uuid::new_v4(),
+                payload: OutNotifGameSettingsChanged {
+                    game_settings: self.game_settings.clone(),
+                },
+            });
+            self.broadcast(notif).await;
         }
     }
 }
@@ -448,6 +496,7 @@ impl Message<StartGameRequest> for RoomActor {
         self.round_ticket = None;
         self.game_settings = game_settings.clone();
         self.is_game_running = true;
+        self.rounds_played = 0;
 
         self.reply_status(&requester, correlation_id, "success")
             .await;
@@ -579,6 +628,68 @@ impl Message<SendAnswerRequest> for RoomActor {
             }
             self.finish_round().await;
         }
+    }
+}
+
+pub struct StopGameRequest {
+    pub requester: ActorRef<SessionClientActor>,
+    pub correlation_id: Uuid,
+}
+
+impl Message<StopGameRequest> for RoomActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        StopGameRequest {
+            requester,
+            correlation_id,
+        }: StopGameRequest,
+        _ctx: &mut Context<Self, ()>,
+    ) {
+        let Some((_uuid, room_info, _)) = self.find_client(requester.id()) else {
+            error!("no client");
+            return;
+        };
+
+        if !room_info.is_admin {
+            self.reply_status(&requester, correlation_id, "not admin")
+                .await;
+            return;
+        }
+
+        if !self.is_game_running {
+            self.reply_status(&requester, correlation_id, "not running")
+                .await;
+            return;
+        }
+
+        if let Some(ticket) = self.round_ticket.take() {
+            self.pending.cancel(ticket);
+        }
+
+        if self.current_question.is_some() {
+            self.push_missing_answers();
+        }
+
+        self.reply_status(&requester, correlation_id, "success")
+            .await;
+
+        let notif = TransportMsg::OutNotifGameStopped(TransportEnvelope {
+            correlation_id: Uuid::new_v4(),
+            payload: OutNotifGameStopped {
+                question: self.current_question.clone().unwrap_or_default(),
+                answers: self.current_answers.clone(),
+            },
+        });
+        self.broadcast(notif).await;
+
+        self.is_game_running = false;
+        self.current_question = None;
+        self.current_answers.clear();
+        self.round_start = None;
+        self.round_ticket = None;
+        self.rounds_played = 0;
     }
 }
 
