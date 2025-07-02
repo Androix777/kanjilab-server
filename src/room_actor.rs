@@ -11,7 +11,7 @@ use std::{
     ops::ControlFlow,
     time::{Duration, Instant},
 };
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 // #endregion
 
@@ -24,6 +24,7 @@ enum RoomPending {
 }
 
 pub struct RoomActor {
+    #[allow(dead_code)]
     name: String,
     clients: HashMap<Uuid, RoomClient>,
     game_settings: GameSettings,
@@ -131,6 +132,7 @@ impl RoomActor {
             },
         });
         self.broadcast(ws).await;
+        debug!("OUT_NOTIF_clientRegistered");
     }
 
     async fn notif_client_disconnected(&self, uuid: Uuid) {
@@ -141,6 +143,7 @@ impl RoomActor {
             },
         });
         self.broadcast(ws).await;
+        debug!("OUT_NOTIF_clientDisconnected");
     }
     async fn notif_admin_made(&self, uuid: Uuid) {
         let ws = TransportMsg::OutNotifAdminMade(TransportEnvelope {
@@ -150,6 +153,7 @@ impl RoomActor {
             },
         });
         self.broadcast(ws).await;
+        debug!("OUT_NOTIF_adminMade");
     }
 
     async fn finish_round(&mut self) {
@@ -167,6 +171,7 @@ impl RoomActor {
             },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_roundEnded");
 
         self.current_question = None;
         self.current_answers.clear();
@@ -186,6 +191,7 @@ impl RoomActor {
                 },
             });
             self.broadcast(stop_notif).await;
+            debug!("OUT_NOTIF_gameStopped");
             return;
         }
 
@@ -210,6 +216,7 @@ impl RoomActor {
             payload: OutReqQuestion {},
         });
         admin.session.tell(SendWs(req)).await.ok();
+        debug!("OUT_REQ_question");
     }
 
     fn push_missing_answers(&mut self) {
@@ -317,6 +324,7 @@ impl Message<AddClient> for RoomActor {
                 },
             });
             self.broadcast(notif).await;
+            debug!("OUT_NOTIF_gameSettingsChanged");
         }
     }
 }
@@ -413,6 +421,7 @@ impl Message<SetGameSettingsRequest> for RoomActor {
             payload: OutNotifGameSettingsChanged { game_settings },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_gameSettingsChanged");
     }
 }
 
@@ -450,6 +459,7 @@ impl Message<SendChatRequest> for RoomActor {
             },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_chatSent {message}");
     }
 }
 
@@ -506,6 +516,7 @@ impl Message<StartGameRequest> for RoomActor {
             payload: OutNotifGameStarted { game_settings },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_gameStarted");
 
         self.request_question().await;
     }
@@ -542,6 +553,7 @@ impl Message<ProvideQuestionResponse> for RoomActor {
                     payload: OutNotifQuestion { question_svg },
                 });
                 self.broadcast(notif).await;
+                debug!("OUT_NOTIF_question");
 
                 self.round_start = Some(Instant::now());
 
@@ -633,6 +645,7 @@ impl Message<SendAnswerRequest> for RoomActor {
             },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_clientAnswered");
 
         if self.current_answers.len() == self.clients.len() {
             if let Some(ticket) = self.round_ticket.take() {
@@ -695,6 +708,7 @@ impl Message<StopGameRequest> for RoomActor {
             },
         });
         self.broadcast(notif).await;
+        debug!("OUT_NOTIF_gameStopped");
 
         self.is_game_running = false;
         self.current_question = None;

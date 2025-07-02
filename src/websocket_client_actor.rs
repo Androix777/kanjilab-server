@@ -9,7 +9,7 @@ use kameo::{
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMsg};
-use tracing::error;
+use tracing::{error, trace};
 pub type RawResult = Result<String, String>;
 type StreamItem = StreamMessage<RawResult, (), ()>;
 
@@ -33,6 +33,7 @@ impl WebSocketClientActor {
 
     async fn send_to_session(&self, ws_msg: TransportMsg) {
         if let Some(session) = self.session.upgrade() {
+            trace!("<--- {ws_msg:?}");
             session.tell(ws_msg).await.ok();
         }
     }
@@ -86,6 +87,7 @@ impl Message<ToTransport> for WebSocketClientActor {
             ToTransport::TransportMsg(ws_msg) => match serialize(&ws_msg) {
                 Ok(text) => {
                     self.write.send(WsMsg::Text(text.into())).await.ok();
+                    trace!("---> {ws_msg:?}");
                 }
                 Err(e) => error!("serialize error: {e}"),
             },
