@@ -604,10 +604,22 @@ impl Message<SendAnswerRequest> for RoomActor {
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
 
+        let is_correct = self
+            .current_question
+            .as_ref()
+            .map(|question| {
+                question
+                    .word_info
+                    .readings
+                    .iter()
+                    .any(|reading| reading.reading == answer)
+            })
+            .unwrap_or(false);
+
         self.current_answers.push(AnswerInfo {
             id: uuid.to_string(),
             answer: answer.clone(),
-            is_correct: false,
+            is_correct,
             answer_time: elapsed,
         });
 
