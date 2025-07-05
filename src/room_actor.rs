@@ -163,6 +163,28 @@ impl RoomActor {
 
         self.push_missing_answers();
 
+        self.rounds_played += 1;
+
+        if self.rounds_played >= self.game_settings.rounds_count {
+            self.is_game_running = false;
+
+            let stop_notif = TransportMsg::OutNotifGameStopped(TransportEnvelope {
+                correlation_id: Uuid::new_v4(),
+                payload: OutNotifGameStopped {
+                    question: self.current_question.clone().unwrap_or_default(),
+                    answers: self.current_answers.clone(),
+                },
+            });
+            self.broadcast(stop_notif).await;
+            debug!("OUT_NOTIF_gameStopped");
+
+            self.current_question = None;
+            self.current_answers.clear();
+            self.round_ticket = None;
+            self.round_start = None;
+            return;
+        }
+
         let notif = TransportMsg::OutNotifRoundEnded(TransportEnvelope {
             correlation_id: Uuid::new_v4(),
             payload: OutNotifRoundEnded {
@@ -177,23 +199,6 @@ impl RoomActor {
         self.current_answers.clear();
         self.round_ticket = None;
         self.round_start = None;
-
-        self.rounds_played += 1;
-
-        if self.rounds_played >= self.game_settings.rounds_count {
-            self.is_game_running = false;
-
-            let stop_notif = TransportMsg::OutNotifGameStopped(TransportEnvelope {
-                correlation_id: Uuid::new_v4(),
-                payload: OutNotifGameStopped {
-                    question: QuestionInfo::default(),
-                    answers: Vec::new(),
-                },
-            });
-            self.broadcast(stop_notif).await;
-            debug!("OUT_NOTIF_gameStopped");
-            return;
-        }
 
         self.request_question().await;
     }
