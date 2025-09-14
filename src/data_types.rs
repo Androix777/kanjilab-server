@@ -178,6 +178,7 @@ pub struct GameSettings {
     pub word_part_reading: Option<String>,
     pub fonts_count: u64,
     pub first_font_name: Option<String>,
+    pub dictionary_name: Option<String>,
 }
 
 // #endregion
