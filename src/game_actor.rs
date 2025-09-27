@@ -174,6 +174,20 @@ impl Message<RegisterClientRequest> for GameActor {
             return;
         };
 
+        let running = self.room.ask(IsGameRunning).await.unwrap_or(true);
+        if running {
+            let resp = TransportMsg::OutRespStatus(TransportEnvelope {
+                correlation_id,
+                payload: OutRespStatus {
+                    status: "game already running".into(),
+                },
+            });
+            session.tell(SendWs(resp)).await.ok();
+
+            session.tell(Shutdown).await.ok();
+            return;
+        }
+
         let session_ref = self.pending_clients.remove(&uuid).unwrap();
         self.registered_clients.insert(
             uuid,
@@ -187,13 +201,13 @@ impl Message<RegisterClientRequest> for GameActor {
             },
         );
 
-        self
-            .room
+        self.room
             .tell(AddClient {
                 uuid,
                 session: session_ref.clone(),
             })
-            .await.ok();
+            .await
+            .ok();
 
         session_ref.tell(SetRoom(self.room.downgrade())).await.ok();
 

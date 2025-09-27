@@ -724,4 +724,14 @@ impl Message<StopGameRequest> for RoomActor {
     }
 }
 
+pub struct IsGameRunning;
+
+impl Message<IsGameRunning> for RoomActor {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: IsGameRunning, _ctx: &mut Context<Self, Self::Reply>) -> bool {
+        self.is_game_running
+    }
+}
+
 // #endregion

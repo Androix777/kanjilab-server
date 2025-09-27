@@ -18,12 +18,12 @@ pub struct SessionClientActor {
     sign_challenge: Option<Uuid>,
     signature_verified: bool,
 
-    game: WeakActorRef<crate::game_actor::GameActor>,
+    game: WeakActorRef<GameActor>,
     room: Option<WeakActorRef<RoomActor>>,
 }
 
 impl SessionClientActor {
-    pub fn new(game: WeakActorRef<crate::game_actor::GameActor>) -> Self {
+    pub fn new(game: WeakActorRef<GameActor>) -> Self {
         Self {
             transport: None,
             pub_key: None,
@@ -62,6 +62,17 @@ impl SessionClientActor {
 // #endregion
 
 // #region MESSAGES
+pub struct Shutdown;
+
+impl Message<Shutdown> for SessionClientActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Shutdown, ctx: &mut Context<Self, ()>) {
+        debug!("Client kicked");
+        ctx.actor_ref().kill();
+    }
+}
+
 pub struct SetTransport(pub Recipient<ToTransport>);
 impl Message<SetTransport> for SessionClientActor {
     type Reply = ();
